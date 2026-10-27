@@ -791,7 +791,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </div>
             <p className="flex items-center gap-1.5 text-[11px] text-muted">
-              Выбор устройства вывода поддерживается в Chromium и Electron.
+              Выбор устройства вывода поддерживается в Chromium и Electron. Если слышно эхо,
+              оставьте «Системное устройство по умолчанию»: браузерное эхоподавление надёжнее
+              всего работает с ним.
             </p>
           </div>
         </Section>

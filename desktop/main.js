@@ -17,6 +17,8 @@ const { URL } = require('node:url');
 
 app.setAppUserModelId('ru.yhspeak.client');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Расширенное эхоподавление: учитывает звук, воспроизводимый не только через WebRTC.
+app.commandLine.appendSwitch('enable-features', 'ChromeWideEchoCancellation');
 
 let mainWindow = null;
 let launcherWindow = null;

@@ -3,7 +3,7 @@ import type { ConsumerParams, TransportParams } from '@tsds/shared';
 import type { AppSocket } from './socket';
 import { useApp } from './store';
 import { DEFAULT_SETTINGS, type MicSettings } from './settings';
-import { applyMicGate, createMicGateNode, createNoiseFilter } from './micGate';
+import { applyMicGate, applyRemoteLevel, createMicGateNode, createNoiseFilter } from './micGate';
 
 interface ConsumerEntry {
   consumer: MT.Consumer;
@@ -43,6 +43,10 @@ export class VoiceEngine {
   private pttActive = false;
   private generation = 0;
   private lastSettings: MicSettings = { ...DEFAULT_SETTINGS };
+  private remoteLevelTimer: number | null = null;
+  private remoteLevel = 0;
+  private visibilityHandler: (() => void) | null = null;
+  private readonly lastBytes = new Map<string, number>();
 
   attach(socket: AppSocket): void {
     this.socket = socket;
@@ -275,6 +279,7 @@ export class VoiceEngine {
     this.gateNode = gate;
     this.applyGateSettings(settings);
     this.micStream = destination.stream;
+    applyRemoteLevel(gate, this.remoteLevel);
     return true;
   }
 
@@ -460,12 +465,86 @@ export class VoiceEngine {
     const sinkId = settings.outputDeviceId === 'default' ? '' : settings.outputDeviceId;
     for (const element of this.audioElements.values()) {
       const withSink = element as HTMLAudioElement & {
+        sinkId?: string;
         setSinkId?: (id: string) => Promise<void>;
       };
-      if (typeof withSink.setSinkId === 'function') {
-        await withSink.setSinkId(sinkId).catch(() => undefined);
+      if (typeof withSink.setSinkId !== 'function') continue;
+      // Не переключаем устройство без необходимости: лишняя смена sink
+      // сбивает опорный сигнал эхоподавления Chromium.
+      if (withSink.sinkId === sinkId) continue;
+      await withSink.setSinkId(sinkId).catch(() => undefined);
+    }
+  }
+
+  // Уровень входящих голосов нужен гейту: он не должен открываться
+  // на остатках эха от динамиков, пока звук идёт от собеседников.
+  private startRemoteLevelWatch(): void {
+    if (this.remoteLevelTimer !== null) return;
+    this.remoteLevelTimer = window.setInterval(() => {
+      void this.pollRemoteLevel();
+    }, 400);
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'hidden') {
+        this.remoteLevel = 0;
+        this.lastBytes.clear();
+        applyRemoteLevel(this.gateNode, 0);
+        return;
+      }
+      void this.pollRemoteLevel();
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+  }
+
+  private stopRemoteLevelWatch(): void {
+    if (this.remoteLevelTimer !== null) {
+      window.clearInterval(this.remoteLevelTimer);
+      this.remoteLevelTimer = null;
+    }
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
+    this.remoteLevel = 0;
+    this.lastBytes.clear();
+    applyRemoteLevel(this.gateNode, 0);
+  }
+
+  private async pollRemoteLevel(): Promise<void> {
+    if (document.visibilityState === 'hidden') {
+      applyRemoteLevel(this.gateNode, 0);
+      return;
+    }
+    const live = new Set<string>();
+    let level = 0;
+    for (const [id, entry] of this.consumers) {
+      if (entry.kind !== 'audio') continue;
+      live.add(id);
+      try {
+        const report = await entry.consumer.getStats();
+        report.forEach((stat) => {
+          const audio = stat as unknown as {
+            type?: string;
+            kind?: string;
+            audioLevel?: number;
+            bytesReceived?: number;
+          };
+          if (audio.type !== 'inbound-rtp' || audio.kind !== 'audio') return;
+          const bytes = Number(audio.bytesReceived ?? 0);
+          const previous = this.lastBytes.get(id);
+          this.lastBytes.set(id, bytes);
+          if (previous !== undefined && bytes <= previous) return;
+          const value = Number(audio.audioLevel);
+          if (Number.isFinite(value) && value > level) level = value;
+        });
+      } catch {
+        /* консьюмер уже закрыт */
       }
     }
+    for (const id of [...this.lastBytes.keys()]) {
+      if (!live.has(id)) this.lastBytes.delete(id);
+    }
+    this.remoteLevel = level;
+    applyRemoteLevel(this.gateNode, level);
   }
 
   async addConsumer(params: ConsumerParams): Promise<void> {
@@ -494,6 +573,7 @@ export class VoiceEngine {
         const element = new Audio();
         element.srcObject = stream;
         element.autoplay = true;
+        element.setAttribute('playsinline', '');
         element.volume = Math.max(0, Math.min(1, this.mySettings().outputVolume));
         element.muted = this.deafened;
         element.setAttribute('data-yhspeak-audio', params.userId);
@@ -501,6 +581,7 @@ export class VoiceEngine {
         void element.play().catch(() => undefined);
         this.audioElements.set(consumer.id, element);
         void this.applyOutputDevice(this.mySettings());
+        this.startRemoteLevelWatch();
       } else {
         const stream = new MediaStream([consumer.track]);
         this.screenStreams.set(params.userId, stream);
@@ -654,6 +735,7 @@ export class VoiceEngine {
       this.removeConsumer(entry.consumer.id);
     }
     this.consumers.clear();
+    this.stopRemoteLevelWatch();
     for (const element of this.audioElements.values()) {
       element.pause();
       element.srcObject = null;

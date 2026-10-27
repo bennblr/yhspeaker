@@ -7,12 +7,15 @@ class MicGateProcessor extends AudioWorkletProcessor {
     return [
       { name: 'threshold', defaultValue: 0.012, minValue: 0.0001, maxValue: 1, automationRate: 'k-rate' },
       { name: 'enabled', defaultValue: 1, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      // Уровень входящего голоса: не даём открыть гейт на остатках эха от динамиков.
+      { name: 'remote', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
     ];
   }
   constructor() {
     super();
     this.gain = 1;
     this.hold = 0;
+    this.remote = 0;
   }
   process(inputs, outputs, parameters) {
     const input = inputs[0];
@@ -21,13 +24,19 @@ class MicGateProcessor extends AudioWorkletProcessor {
     const source = input[0];
     const threshold = parameters.threshold[0];
     const enabled = parameters.enabled[0] >= 0.5;
+    const remoteParam = parameters.remote[0];
     let sum = 0;
     if (source) {
       for (let i = 0; i < source.length; i += 1) sum += source[i] * source[i];
     }
     const rms = source && source.length ? Math.sqrt(sum / source.length) : 0;
     const dt = (source ? source.length : 128) / sampleRate;
-    if (rms >= threshold) this.hold = 0.2;
+    // Плавно спадает, когда входящая речь стихает, чтобы гейт не «дребезжал».
+    this.remote = Math.max(remoteParam, this.remote * Math.exp(-dt / 0.35));
+    // Ограничиваем добавку: не больше +8 дБ к пользовательскому порогу.
+    const guard = Math.min(threshold * 2.5, this.remote * 0.15);
+    const openThreshold = Math.max(threshold, guard);
+    if (rms >= openThreshold) this.hold = 0.2;
     else this.hold = Math.max(0, this.hold - dt);
     const target = !enabled || this.hold > 0 ? 1 : 0;
     const attack = Math.exp(-1 / (sampleRate * 0.008));
@@ -84,6 +93,12 @@ export function applyMicGate(
   const enabled = gate.parameters.get('enabled');
   if (threshold) threshold.value = sensitivityThreshold(micSensitivity);
   if (enabled) enabled.value = openMode ? 1 : 0;
+}
+
+export function applyRemoteLevel(gate: AudioWorkletNode | null, level: number): void {
+  if (!gate) return;
+  const param = gate.parameters.get('remote');
+  if (param) param.value = Math.max(0, Math.min(1, level));
 }
 
 export function createNoiseFilter(ctx: AudioContext): BiquadFilterNode {
