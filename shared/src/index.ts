@@ -216,6 +216,10 @@ export interface ClientToServerEvents {
     ack: (res: { id?: string; error?: string }) => void,
   ) => void;
   'voice:closeProducer': (payload: { producerId: string }) => void;
+  'voice:resumeConsumer': (
+    payload: { consumerId: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
   'voice:ready': (payload: { rtpCapabilities: unknown }, ack?: (res: AckResult) => void) => void;
   'voice:setMuted': (payload: { muted: boolean }) => void;
   'voice:setDeafened': (payload: { deafened: boolean }) => void;

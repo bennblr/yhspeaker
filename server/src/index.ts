@@ -754,6 +754,14 @@ io.on('connection', async (socket: AppSocket) => {
     }),
   );
 
+  socket.on(
+    'voice:resumeConsumer',
+    safe(async ({ consumerId }, ack) => {
+      const result = await voice.resumeConsumer(userId, String(consumerId ?? ''));
+      ack?.(result);
+    }),
+  );
+
   socket.on('voice:setMuted', ({ muted }) => {
     if (!sessions.has(userId)) return;
     sessions.update(userId, { muted: Boolean(muted) });

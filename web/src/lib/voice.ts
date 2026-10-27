@@ -511,6 +511,7 @@ export class VoiceEngine {
       consumer.on('trackended', () => this.removeConsumer(consumer.id));
 
       consumer.resume();
+      this.socket?.emit('voice:resumeConsumer', { consumerId: consumer.id });
     } catch (error) {
       console.error('[voice] consume failed', error);
     }

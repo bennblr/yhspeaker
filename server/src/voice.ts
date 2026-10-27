@@ -633,6 +633,22 @@ export class VoiceManager {
     }
   }
 
+  async resumeConsumer(userId: string, consumerId: string): Promise<AckResult> {
+    const peer = this.getPeer(userId);
+    if (!peer || peer.closed) return { ok: false, error: 'Вы не в голосовом канале' };
+    for (const consumer of peer.consumers.values()) {
+      if (consumer.id !== consumerId) continue;
+      try {
+        await consumer.resume();
+        return { ok: true };
+      } catch (error) {
+        console.error('[voice] resumeConsumer failed', error);
+        return { ok: false, error: 'Не удалось возобновить приём медиа' };
+      }
+    }
+    return { ok: false, error: 'Потребитель не найден' };
+  }
+
   private closeConsumer(peer: Peer, producerId: string): void {
     const consumer = peer.consumers.get(producerId);
     if (!consumer) return;
