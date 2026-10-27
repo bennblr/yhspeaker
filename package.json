@@ -1,0 +1,31 @@
+{
+  "name": "yhspeak",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted voice & text chat server with web and Electron clients",
+  "workspaces": [
+    "shared",
+    "server",
+    "web",
+    "desktop",
+    "platform"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @tsds/server",
+    "dev:web": "npm run dev -w @tsds/web",
+    "dev:platform": "npm run dev -w @tsds/platform",
+    "build": "npm run build -w @tsds/web && npm run build -w @tsds/server && npm run build -w @tsds/platform",
+    "start": "npm run start -w @tsds/server",
+    "start:platform": "npm run start -w @tsds/platform",
+    "typecheck": "npm run typecheck -w @tsds/server && npm run typecheck -w @tsds/web && npm run typecheck -w @tsds/platform",
+    "desktop": "npm run start -w @tsds/desktop",
+    "dist:desktop": "npm run dist -w @tsds/desktop"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

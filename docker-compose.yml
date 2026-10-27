@@ -1,0 +1,43 @@
+services:
+  platform:
+    build: .
+    image: yhspeak-platform:latest
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      NODE_ENV: "production"
+      PLATFORM_BIND: "127.0.0.1"
+      PLATFORM_PORT: "4100"
+      PLATFORM_DATA_DIR: "/app/platform-data"
+    volumes:
+      - platform-data:/app/platform-data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4100/api/platform/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      platform:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  platform-data:
+  caddy_data:
+  caddy_config:

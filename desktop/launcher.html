@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YHSpeak — подключение</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #141824;
+        --panel2: #191e2c;
+        --line: #252c3d;
+        --text: #e7eaf3;
+        --muted: #8a93a8;
+        --accent: #6c7cff;
+        --accent2: #9b6cff;
+        --ok: #3ddc97;
+        --danger: #ff6b7d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background:
+          radial-gradient(600px 360px at 15% 0%, rgba(108, 124, 255, 0.18), transparent 70%),
+          radial-gradient(500px 360px at 100% 100%, rgba(155, 108, 255, 0.12), transparent 70%),
+          var(--bg);
+        color: var(--text);
+        display: flex;
+        flex-direction: column;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      .titlebar {
+        flex: 0 0 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding-left: 14px;
+        background: rgba(9, 11, 16, 0.94);
+        border-bottom: 1px solid var(--line);
+        -webkit-app-region: drag;
+      }
+
+      .titlebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #aab2c7;
+      }
+
+      .titlebar-brand svg {
+        width: 14px;
+        height: 14px;
+        stroke: #fff;
+      }
+
+      .titlebar-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 8px rgba(61, 220, 151, 0.8);
+      }
+
+      .titlebar-controls {
+        margin-left: auto;
+        display: flex;
+        height: 100%;
+        -webkit-app-region: no-drag;
+      }
+
+      .titlebar-controls button {
+        width: 44px;
+        height: 100%;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .titlebar-controls button:hover {
+        background: var(--panel2);
+        color: var(--text);
+      }
+
+      .titlebar-controls button.close:hover {
+        background: #d93a4e;
+        color: #fff;
+      }
+
+      .titlebar-controls svg {
+        width: 15px;
+        height: 15px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+      }
+
+      .content {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 22px 28px;
+        overflow: auto;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 460px;
+        background: linear-gradient(180deg, rgba(25, 30, 44, 0.96), rgba(17, 21, 32, 0.98));
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 32px 30px 26px;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 26px;
+      }
+
+      .logo {
+        width: 54px;
+        height: 54px;
+        border-radius: 16px;
+        background: linear-gradient(140deg, var(--accent), var(--accent2));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 10px 30px rgba(108, 124, 255, 0.35);
+        flex-shrink: 0;
+      }
+
+      .logo svg {
+        width: 30px;
+        height: 30px;
+        stroke: #fff;
+      }
+
+      .brand h1 {
+        font-size: 20px;
+        margin: 0;
+        letter-spacing: 0.04em;
+      }
+
+      .brand p {
+        margin: 3px 0 0;
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      h2 {
+        font-size: 17px;
+        margin: 0 0 6px;
+      }
+
+      .lead {
+        margin: 0 0 20px;
+        font-size: 12.5px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      label {
+        display: block;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .input-wrap {
+        position: relative;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 12px;
+        padding: 13px 14px;
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+
+      input::placeholder {
+        color: #626c82;
+      }
+
+      input:focus {
+        border-color: rgba(108, 124, 255, 0.7);
+        box-shadow: 0 0 0 3px rgba(108, 124, 255, 0.16);
+      }
+
+      .hint {
+        margin: 8px 0 0;
+        font-size: 11px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .error {
+        display: none;
+        margin-top: 12px;
+        border: 1px solid rgba(255, 107, 125, 0.3);
+        background: rgba(255, 107, 125, 0.08);
+        color: var(--danger);
+        border-radius: 10px;
+        padding: 9px 11px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .error.show {
+        display: block;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      button {
+        font: inherit;
+        border: 0;
+        cursor: pointer;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-size: 13.5px;
+        font-weight: 600;
+        transition: transform 0.12s ease, background 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:active {
+        transform: scale(0.985);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .primary {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        background: linear-gradient(135deg, var(--accent), #5a6bf0);
+        color: #fff;
+        box-shadow: 0 10px 26px rgba(108, 124, 255, 0.3);
+      }
+
+      .primary:hover {
+        background: linear-gradient(135deg, #7a88ff, #6575f5);
+      }
+
+      .ghost {
+        background: var(--panel2);
+        color: #c3cadb;
+        border: 1px solid var(--line);
+      }
+
+      .ghost:hover {
+        background: #202739;
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.35);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .divider {
+        height: 1px;
+        background: var(--line);
+        margin: 24px 0 16px;
+      }
+
+      .footnote {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        font-size: 11px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      .footnote .dot {
+        margin-top: 6px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--ok);
+        flex-shrink: 0;
+      }
+
+      .version {
+        margin-top: 18px;
+        text-align: center;
+        font-size: 10.5px;
+        color: #5c657a;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="titlebar">
+      <div class="titlebar-brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="2" />
+          <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+          <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+          <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+        </svg>
+        YHSpeak
+        <span class="titlebar-dot"></span>
+      </div>
+      <div class="titlebar-controls">
+        <button id="minimize" type="button" title="Свернуть" aria-label="Свернуть">
+          <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
+        </button>
+        <button id="close" class="close" type="button" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <main class="card">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="2" />
+            <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+            <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+          </svg>
+        </div>
+        <div>
+          <h1>YHSpeak</h1>
+          <p>self-hosted voice</p>
+        </div>
+      </div>
+
+      <h2>Подключение к серверу</h2>
+      <p class="lead">
+        Введите адрес вашего сервера YHSpeak. Один сервер — и веб-клиент, и это приложение
+        используют одни и те же каналы, чат и аккаунты.
+      </p>
+
+      <form id="form">
+        <label for="server">Адрес сервера</label>
+        <div class="input-wrap">
+          <input
+            id="server"
+            type="text"
+            placeholder="https://voice.example.com"
+            autocomplete="off"
+            spellcheck="false"
+            autofocus
+          />
+        </div>
+        <p class="hint">
+          Для микрофона и демонстрации экрана нужен HTTPS (или http://localhost при локальной
+          разработке).
+        </p>
+        <div id="error" class="error"></div>
+
+        <div class="actions">
+          <button id="connect" class="primary" type="submit">
+            <span id="connect-label">Подключиться</span>
+          </button>
+          <button id="quit" class="ghost" type="button">Выход</button>
+        </div>
+      </form>
+
+      <div class="divider"></div>
+
+      <div class="footnote">
+        <span class="dot"></span>
+        <span>
+          Адрес можно сменить позже кнопкой «Сервер» в шапке приложения. Настройки микрофона,
+          push-to-talk и динамиков находятся внутри приложения.
+        </span>
+      </div>
+
+      <div class="version">Клиент для Windows · <span id="version">1.0.0</span></div>
+      </main>
+    </div>
+
+    <script src="launcher.js"></script>
+  </body>
+</html>

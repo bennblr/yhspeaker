@@ -1,0 +1,25 @@
+{
+	on_demand_tls {
+		ask http://127.0.0.1:4100/api/tls/ask
+	}
+}
+
+# Все домены, привязанные к серверам в панели, приходят сюда.
+# Сертификат выпускается только после ответа 200 от платформы.
+https:// {
+	tls {
+		on_demand
+	}
+
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4100
+
+	log {
+		output stdout
+		format console
+	}
+}
+
+http:// {
+	redir https://{host}{uri} permanent
+}

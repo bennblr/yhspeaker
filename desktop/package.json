@@ -1,0 +1,69 @@
+{
+  "name": "@tsds/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "YHSpeak desktop client for Windows",
+  "author": "YHSpeak",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ru.yhspeak.client",
+    "productName": "YHSpeak",
+    "beforeBuild": "before-build.js",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "launcher.html",
+      "launcher.js",
+      "build/icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "../node_modules/uiohook-napi",
+        "to": "ptt/node_modules/uiohook-napi",
+        "filter": [
+          "dist/**/*",
+          "prebuilds/win32-x64/**/*",
+          "package.json",
+          "LICENSE"
+        ]
+      },
+      {
+        "from": "../node_modules/node-gyp-build",
+        "to": "ptt/node_modules/node-gyp-build"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "YHSpeak-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "YHSpeak"
+    }
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.5"
+  }
+}

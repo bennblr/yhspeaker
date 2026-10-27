@@ -1,0 +1,26 @@
+import { io, type Socket } from 'socket.io-client';
+import type { ClientToServerEvents, ServerToClientEvents } from '@tsds/shared';
+
+export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+
+let socket: AppSocket | null = null;
+
+export function connectSocket(token: string): AppSocket {
+  socket?.disconnect();
+  socket = io(window.location.origin, {
+    auth: { token },
+    transports: ['websocket', 'polling'],
+    reconnectionDelay: 800,
+    reconnectionDelayMax: 5000,
+  });
+  return socket;
+}
+
+export function getSocket(): AppSocket | null {
+  return socket;
+}
+
+export function disconnectSocket(): void {
+  socket?.disconnect();
+  socket = null;
+}

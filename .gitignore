@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+platform-data/
+.env
+*.log
+.DS_Store
+Thumbs.db
+web/dist/
+server/dist/
+desktop/release/
+desktop/release-*/

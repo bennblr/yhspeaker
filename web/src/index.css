@@ -1,0 +1,186 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-slate-100 antialiased;
+  margin: 0;
+  overflow: hidden;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3245 transparent;
+}
+
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2a3245;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: rgba(108, 124, 255, 0.35);
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  margin: 0;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #232a3b;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #6c7cff;
+  border: 2px solid #0f1219;
+  cursor: grab;
+  transition: transform 0.15s ease;
+}
+
+input[type='range']::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type='range']::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #232a3b;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6c7cff;
+  border: 2px solid #0f1219;
+  cursor: grab;
+}
+
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(108, 124, 255, 0.25);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-[#5a6bf0] active:scale-[0.985];
+  }
+
+  .btn-ghost {
+    @apply btn bg-panel3 text-slate-200 hover:bg-[#222940];
+  }
+
+  .btn-danger {
+    @apply btn bg-danger/15 text-danger hover:bg-danger/25;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-line bg-panel px-3 py-2.5 text-sm text-slate-100
+      placeholder:text-slate-500 outline-none transition focus:border-accent/70 focus:ring-2 focus:ring-accent/20;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted;
+  }
+
+  .card {
+    @apply rounded-xl border border-line bg-panel2;
+  }
+
+  .icon-btn {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted transition
+      hover:bg-panel3 hover:text-slate-100;
+  }
+
+  .icon-btn-active {
+    @apply bg-accent/15 text-accent hover:bg-accent/20 hover:text-accent;
+  }
+
+  .sidebar-item {
+    @apply flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-400 transition
+      hover:bg-panel3 hover:text-slate-200;
+  }
+
+  .sidebar-item-active {
+    @apply bg-panel3 text-slate-100;
+  }
+
+  .tooltip {
+    @apply pointer-events-none absolute -top-9 left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md
+      border border-line bg-[#0a0c12] px-2 py-1 text-[11px] font-medium text-slate-200 opacity-0
+      shadow-panel transition group-hover:opacity-100;
+  }
+
+  .switch {
+    @apply relative h-6 w-11 shrink-0 cursor-pointer rounded-full bg-panel3 transition;
+  }
+
+  .switch-on {
+    @apply bg-accent;
+  }
+
+  .switch-knob {
+    @apply absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white/90 shadow transition;
+  }
+
+  .switch-knob-on {
+    @apply left-[22px];
+  }
+}
