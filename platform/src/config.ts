@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { MAX_VOICE_PARTICIPANTS, MIN_VOICE_PARTICIPANTS } from '@tsds/shared';
+import { normalizeDomain } from './domain.js';
 
 const platformDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rootDir = path.resolve(platformDir, '..');
@@ -83,6 +84,7 @@ export interface PlatformConfig {
   port: number;
   bind: string;
   publicHost: string;
+  tenantDomainSuffix: string;
   dataDir: string;
   webDistDir: string;
   serverEntry: string;
@@ -124,12 +126,25 @@ if (rtcPoolEnd < rtcPoolStart) {
 
 const jwtSecret = resolveJwtSecret();
 
+function resolveTenantDomainSuffix(): string {
+  const raw = envString('PLATFORM_TENANT_DOMAIN_SUFFIX', '');
+  if (!raw) return '';
+  try {
+    return normalizeDomain(raw);
+  } catch {
+    throw new Error(
+      'PLATFORM_TENANT_DOMAIN_SUFFIX должен быть доменом, например example.com',
+    );
+  }
+}
+
 export const config: PlatformConfig = {
   rootDir,
   isProduction,
   port: envInt('PLATFORM_PORT', 4100),
   bind: envString('PLATFORM_BIND', '127.0.0.1'),
   publicHost: normalizeHostname(envString('PLATFORM_HOST', '')),
+  tenantDomainSuffix: resolveTenantDomainSuffix(),
   dataDir: path.resolve(rootDir, envString('PLATFORM_DATA_DIR', 'platform-data')),
   webDistDir: path.join(rootDir, 'web', 'dist'),
   serverEntry: path.join(rootDir, 'server', 'dist', 'index.js'),

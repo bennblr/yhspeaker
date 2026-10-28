@@ -15,7 +15,7 @@ import {
 import { PlatformAuth } from './auth.js';
 import { config } from './config.js';
 import { decryptSecret, encryptSecret, randomPassword, randomToken } from './crypto.js';
-import { DomainError, normalizeDomain, normalizeHostHeader } from './domain.js';
+import { DomainError, normalizeDomain, normalizeHostHeader, slugifyHostLabel } from './domain.js';
 import { forwardHttp, forwardUpgrade } from './proxy.js';
 import { PlatformStore, type TenantRecord } from './store.js';
 import { TenantSupervisor } from './supervisor.js';
@@ -104,6 +104,20 @@ function cleanDomains(raw: string[], exceptId?: string): string[] {
   return domains;
 }
 
+function defaultTenantDomains(name: string): string[] {
+  const suffix = config.tenantDomainSuffix;
+  if (!suffix) return [];
+  const base = slugifyHostLabel(name) || 'server';
+  let candidate = `${base}.${suffix}`;
+  for (let index = 2; index < 100 && store.domainOwner(candidate); index += 1) {
+    candidate = `${base}-${index}.${suffix}`;
+  }
+  if (store.domainOwner(candidate)) {
+    candidate = `${base}-${crypto.randomBytes(2).toString('hex')}.${suffix}`;
+  }
+  return [candidate];
+}
+
 function allocateHttpPort(): number {
   const used = new Set(store.servers().map((server) => server.httpPort));
   for (let port = config.httpPortStart; port <= config.httpPortEnd; port += 1) {
@@ -159,6 +173,7 @@ function serverView(server: TenantRecord) {
 function platformMeta() {
   return {
     publicHost: config.publicHost,
+    tenantDomainSuffix: config.tenantDomainSuffix,
     announcedIp: config.announcedIp,
     httpPortStart: config.httpPortStart,
     httpPortEnd: config.httpPortEnd,
@@ -304,7 +319,10 @@ platformApi.post(
   requireAdmin,
   wrap(async (req, res) => {
     const body = parseBody(createServerSchema, req.body);
-    const domains = cleanDomains(body.domains ?? []);
+    const requestedDomains = body.domains ?? [];
+    const domains = cleanDomains(
+      requestedDomains.length > 0 ? requestedDomains : defaultTenantDomains(body.name),
+    );
     const maxParticipants = body.maxParticipants ?? config.defaultMaxParticipants;
     const httpPort = allocateHttpPort();
     const rtc = allocateRtcRange(maxParticipants);

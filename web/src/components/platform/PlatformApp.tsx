@@ -880,7 +880,10 @@ export function PlatformApp() {
               placeholder={'alpha.example.com\nchat.alpha.example.com'}
             />
             <p className="mt-1 text-[11px] leading-relaxed text-muted">
-              По одному домену в строке. A-запись каждого домена должна указывать на{' '}
+              {meta?.tenantDomainSuffix
+                ? `Можно оставить пустым — домен создастся автоматически на основе названия (суффикс ${meta.tenantDomainSuffix}). `
+                : 'По одному домену в строке. '}
+              A-запись каждого домена должна указывать на{' '}
               <span className="font-mono text-slate-300">{meta?.announcedIp ?? 'ANNOUNCED_IP'}</span>.
               Можно добавить позже.
             </p>

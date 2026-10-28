@@ -21,6 +21,7 @@ export interface PlatformServer {
 
 export interface PlatformMeta {
   publicHost: string;
+  tenantDomainSuffix: string;
   announcedIp: string;
   httpPortStart: number;
   httpPortEnd: number;

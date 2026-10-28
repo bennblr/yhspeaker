@@ -151,6 +151,7 @@ nano .env
 | Переменная | Значение |
 |---|---|
 | `PLATFORM_HOST` | домен панели без `https://`, например `admin.example.com` |
+| `PLATFORM_TENANT_DOMAIN_SUFFIX` | необязательный суффикс автодоменов, например `example.com`: сервер без указанных доменов получает `<название>.example.com` (нужна wildcard A-запись `*`) |
 | `PLATFORM_JWT_SECRET` | случайная строка от 16 символов (лучше 64 hex) |
 | `PLATFORM_SECRET_KEY` | отдельная случайная строка: ею шифруются пароли серверов |
 | `PLATFORM_ADMIN_LOGIN` / `PLATFORM_ADMIN_PASSWORD` | вход в панель платформы |
