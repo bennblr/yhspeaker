@@ -20,6 +20,26 @@ function toast(type: 'ok' | 'error' | 'info', text: string): void {
   useApp.getState().pushToast(type, text);
 }
 
+const AUDIO_JITTER_BUFFER_MS = 120;
+
+// Адаптивный джиттер-буфер Chrome по умолчанию держит 200–500 мс — это и есть
+// основная часть задержки при приёме речи. Ограничиваем его разумным минимумом.
+function tuneAudioReceiver(consumer: MT.Consumer): void {
+  const receiver = consumer.rtpReceiver as unknown as
+    | { jitterBufferTarget?: number; playoutDelayHint?: number }
+    | undefined;
+  if (!receiver) return;
+  try {
+    if ('jitterBufferTarget' in receiver) {
+      receiver.jitterBufferTarget = AUDIO_JITTER_BUFFER_MS;
+    } else if ('playoutDelayHint' in receiver) {
+      receiver.playoutDelayHint = 0;
+    }
+  } catch {
+    /* браузер не поддерживает настройку */
+  }
+}
+
 export class VoiceEngine {
   private socket: AppSocket | null = null;
   private device: Device | null = null;
@@ -40,6 +60,7 @@ export class VoiceEngine {
   private wantMic = false;
   private muted = false;
   private deafened = false;
+  private readonly localMuted = new Set<string>();
   private pttActive = false;
   private generation = 0;
   private lastSettings: MicSettings = { ...DEFAULT_SETTINGS };
@@ -250,7 +271,7 @@ export class VoiceEngine {
     });
 
     const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-    const ctx: AudioContext = new Ctx();
+    const ctx: AudioContext = new Ctx({ latencyHint: 'interactive' });
     const source = ctx.createMediaStreamSource(raw);
     const gain = ctx.createGain();
     gain.gain.value = settings.inputGain;
@@ -308,7 +329,7 @@ export class VoiceEngine {
       if (!track) return false;
       const producer = await this.sendTransport.produce({
         track,
-        encodings: [{ maxBitrate: 64_000 }],
+        encodings: [{ maxBitrate: 48_000 }],
         codecOptions: {
           opusStereo: false,
           opusDtx: true,
@@ -381,13 +402,24 @@ export class VoiceEngine {
   setDeafened(deafened: boolean): void {
     this.deafened = deafened;
     patchVoice({ deafened });
-    for (const element of this.audioElements.values()) {
-      element.muted = deafened;
+    for (const [id, element] of this.audioElements) {
+      const entry = this.consumers.get(id);
+      element.muted = deafened || (entry ? this.localMuted.has(entry.userId) : false);
     }
     if (this.currentChannelId) {
       this.socket?.emit('voice:setDeafened', { deafened });
     }
     this.applyMicGate();
+  }
+
+  setLocalMuted(userIds: string[]): void {
+    this.localMuted.clear();
+    for (const id of userIds) this.localMuted.add(id);
+    for (const [id, element] of this.audioElements) {
+      const entry = this.consumers.get(id);
+      if (!entry) continue;
+      element.muted = this.deafened || this.localMuted.has(entry.userId);
+    }
   }
 
   setPtt(active: boolean): void {
@@ -561,6 +593,7 @@ export class VoiceEngine {
         consumer.close();
         return;
       }
+      if (params.kind === 'audio') tuneAudioReceiver(consumer);
       this.consumers.set(consumer.id, {
         consumer,
         userId: params.userId,
@@ -575,7 +608,7 @@ export class VoiceEngine {
         element.autoplay = true;
         element.setAttribute('playsinline', '');
         element.volume = Math.max(0, Math.min(1, this.mySettings().outputVolume));
-        element.muted = this.deafened;
+        element.muted = this.deafened || this.localMuted.has(params.userId);
         element.setAttribute('data-yhspeak-audio', params.userId);
         document.body.appendChild(element);
         void element.play().catch(() => undefined);
@@ -632,7 +665,7 @@ export class VoiceEngine {
     if (this.screenProducer) return;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
+        video: { frameRate: 24 },
         audio: false,
       });
       const track = stream.getVideoTracks()[0];
@@ -640,8 +673,8 @@ export class VoiceEngine {
 
       const producer = await this.sendTransport.produce({
         track,
-        encodings: [{ maxBitrate: 2_500_000 }],
-        codecOptions: { videoGoogleStartBitrate: 1000 },
+        encodings: [{ maxBitrate: 1_800_000 }],
+        codecOptions: { videoGoogleStartBitrate: 800 },
         appData: { source: 'screen' },
       });
       this.screenProducer = producer;
@@ -791,3 +824,8 @@ export class VoiceEngine {
 }
 
 export const voice = new VoiceEngine();
+
+useApp.subscribe((state, previous) => {
+  if (state.localMuted !== previous.localMuted) voice.setLocalMuted(state.localMuted);
+});
+voice.setLocalMuted(useApp.getState().localMuted);

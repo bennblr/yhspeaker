@@ -7,13 +7,18 @@ import { Server } from 'socket.io';
 import { z } from 'zod';
 import {
   APP_VERSION,
+  BASE_ROLES,
+  BASE_ROLE_LABELS,
   MAX_CHANNEL_NAME,
   MAX_DISPLAY_NAME,
   MAX_GROUP_NAME,
+  MAX_LABEL_LENGTH,
   MAX_MESSAGE_LENGTH,
   MAX_ROLE_NAME,
   hasAnyPermission,
   hasPermission,
+  isChannelVisible,
+  type BaseRole,
   type Channel,
   type PermissionKey,
   type RolePermissions,
@@ -26,6 +31,7 @@ import {
 } from './auth.js';
 import { config } from './config.js';
 import { SessionService } from './session.js';
+import { StatsRecorder } from './stats.js';
 import { Store } from './store.js';
 import { VoiceManager } from './voice.js';
 import type { AppServer, AppSocket } from './types.js';
@@ -49,6 +55,7 @@ const io: AppServer = new Server(httpServer, {
 
 const sessions = new SessionService(io);
 const socketAccounts = new Map<string, Account>();
+const stats = new StatsRecorder(sessions, config.dataDir);
 
 const auth = new AuthService(store, config, (name) => {
   return (
@@ -192,16 +199,23 @@ const channelPasswordSchema = z
   .string()
   .max(64, 'Пароль канала: максимум 64 символа');
 
+const channelVisibilitySchema = {
+  visibleRoles: z.array(z.enum(['admin', 'moderator', 'member', 'guest'])).max(4).optional(),
+  visibleRoleIds: z.array(z.string().min(1)).max(100).optional(),
+};
+
 const channelSchema = z.object({
   name: channelNameSchema,
   type: z.enum(['voice', 'text']),
   password: channelPasswordSchema.optional(),
+  ...channelVisibilitySchema,
 });
 
 const channelUpdateSchema = z.object({
   channelId: z.string().min(1),
   name: channelNameSchema,
   password: channelPasswordSchema.optional(),
+  ...channelVisibilitySchema,
 });
 
 const unlockSchema = z.object({
@@ -256,31 +270,47 @@ function emitGroups(): void {
   }
 }
 
-function channelsFor(role: Account['role']): Channel[] {
-  const channels = store.channels();
-  return role === 'guest' ? channels.filter((channel) => channel.guest) : channels;
+function channelsFor(user: { role: BaseRole; roleIds?: string[] }): Channel[] {
+  return store.channels().filter((channel) => isChannelVisible(user, channel));
 }
 
 function canAccessChannel(
-  user: { id: string; role: Account['role'] },
+  user: { id: string; role: BaseRole; roleIds?: string[] },
   channel: Channel,
 ): boolean {
-  if (channel.guest) return true;
-  if (user.role === 'guest') return false;
+  if (!isChannelVisible(user, channel)) return false;
   if (user.role === 'admin') return true;
   const stored = store.channelById(channel.id);
   return !stored?.passwordHash || sessions.isChannelUnlocked(user.id, channel.id);
 }
 
+function normalizeVisibility(input: {
+  visibleRoles?: BaseRole[];
+  visibleRoleIds?: string[];
+}): { visibleRoles: BaseRole[]; visibleRoleIds: string[] } {
+  const visibleRoles = [...new Set(input.visibleRoles ?? BASE_ROLES)];
+  const known = new Set(store.roles().map((role) => role.id));
+  const visibleRoleIds = [...new Set(input.visibleRoleIds ?? [])].filter((id) => known.has(id));
+  return { visibleRoles, visibleRoleIds };
+}
+
 function emitChannels(): void {
-  const channels = store.channels();
   for (const user of sessions.list()) {
-    sessions
-      .getSocket(user.id)
-      ?.emit(
-        'channels:update',
-        user.role === 'guest' ? channels.filter((channel) => channel.guest) : channels,
-      );
+    sessions.getSocket(user.id)?.emit('channels:update', channelsFor(user));
+  }
+}
+
+// После смены роли или видимости канала отключает тех, кто потерял доступ.
+async function enforceChannelAccess(): Promise<void> {
+  for (const user of sessions.list()) {
+    if (!user.channelId) continue;
+    const channel = store.channels().find((item) => item.id === user.channelId);
+    if (!channel || canAccessChannel(user, channel)) continue;
+    await voice.kick(user.id, 'система');
+    sessions.getSocket(user.id)?.emit('toast', {
+      type: 'info',
+      text: `Канал «${channel.name}» больше не доступен вам`,
+    });
   }
 }
 
@@ -338,6 +368,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     name: config.serverName,
     version: APP_VERSION,
+    online: sessions.list().length,
     voice: voice.getStats(),
   });
 });
@@ -440,6 +471,17 @@ app.get(
     const account = accountFromRequest(req);
     requireAnyPermission(account, ['moderate', 'roles', 'groups']);
     res.json({ users: store.adminUsers() });
+  }),
+);
+
+app.get(
+  '/api/admin/stats',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    requirePermission(account, 'moderate');
+    const raw = Number.parseInt(String(req.query.days ?? '7'), 10);
+    const days = Number.isFinite(raw) ? Math.min(90, Math.max(1, raw)) : 7;
+    res.json({ stats: stats.summary(days), online: sessions.list().length });
   }),
 );
 
@@ -595,7 +637,7 @@ app.put(
 
 app.delete(
   '/api/admin/roles/:roleId',
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'roles');
     const existing = store.roleById(req.params.roleId);
@@ -607,11 +649,52 @@ app.delete(
     }
     sessions.broadcastUsers();
     emitRoles();
+    emitChannels();
     emitGroups();
     voice.onPermissionsChanged();
+    await enforceChannelAccess();
     res.json({ ok: true });
   }),
 );
+
+// ---------- desktop app download ----------
+
+function findDesktopInstaller(): { file: string; name: string; size: number } | null {
+  try {
+    const candidates = fs
+      .readdirSync(config.desktopInstallerDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.exe$/i.test(entry.name))
+      .map((entry) => {
+        const file = path.join(config.desktopInstallerDir, entry.name);
+        const stat = fs.statSync(file);
+        return { file, name: entry.name, size: stat.size, mtime: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    const newest = candidates[0];
+    return newest ? { file: newest.file, name: newest.name, size: newest.size } : null;
+  } catch {
+    return null;
+  }
+}
+
+app.get('/api/desktop', (_req, res) => {
+  const installer = findDesktopInstaller();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    available: Boolean(installer),
+    fileName: installer?.name ?? null,
+    size: installer?.size ?? 0,
+  });
+});
+
+app.get('/download/windows', (_req, res) => {
+  const installer = findDesktopInstaller();
+  if (!installer) {
+    res.status(404).type('text/plain').send('Установщик YHSpeak для Windows пока не загружен.');
+    return;
+  }
+  res.download(installer.file, installer.name);
+});
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Не найдено' });
@@ -627,6 +710,9 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
       maxAge: '1h',
       setHeaders: (res, filePath) => {
         if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-store');
+        if (filePath.endsWith('sw.js') || filePath.endsWith('manifest.webmanifest')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
       },
     }),
   );
@@ -689,7 +775,7 @@ io.on('connection', async (socket: AppSocket) => {
   socket.emit('state:init', {
     me: online,
     users: sessions.list(),
-    channels: channelsFor(account.role),
+    channels: channelsFor(account),
     broadcastGroups: canSeeGroups(account) ? store.broadcastGroups() : [],
     roles: store.roles(),
     routerRtpCapabilities: voice.rtpCapabilities(),
@@ -804,6 +890,7 @@ io.on('connection', async (socket: AppSocket) => {
         channelId: channel.id,
         userId,
         displayName: me.displayName,
+        label: me.label,
         role: me.role,
         text: body.text,
         ts: now,
@@ -846,7 +933,7 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Канал не найден' });
         return;
       }
-      if (me.role === 'guest' && !channel.guest) {
+      if (!isChannelVisible(me, channel)) {
         ack?.({ ok: false, error: 'Канал недоступен' });
         return;
       }
@@ -890,7 +977,7 @@ io.on('connection', async (socket: AppSocket) => {
       }
       const password = body.password?.trim() ?? '';
       const passwordHash = password ? await hashChannelPassword(password) : undefined;
-      store.createChannel(body.name, body.type, passwordHash);
+      store.createChannel(body.name, body.type, passwordHash, normalizeVisibility(body));
       emitChannels();
       ack?.({ ok: true });
     }),
@@ -923,15 +1010,35 @@ io.on('connection', async (socket: AppSocket) => {
         }
         passwordHash = password ? await hashChannelPassword(password) : null;
       }
-      store.updateChannel(channel.id, { name: body.name, passwordHash });
-      if (typeof passwordHash === 'string') {
+      const normalized = normalizeVisibility(body);
+      store.updateChannel(channel.id, {
+        name: body.name,
+        passwordHash,
+        ...(channel.guest
+          ? { visibleRoles: [...BASE_ROLES], visibleRoleIds: [] }
+          : {
+              ...(body.visibleRoles !== undefined
+                ? { visibleRoles: normalized.visibleRoles }
+                : {}),
+              ...(body.visibleRoleIds !== undefined
+                ? { visibleRoleIds: normalized.visibleRoleIds }
+                : {}),
+            }),
+      });
+      const updated = store.channels().find((item) => item.id === channel.id);
+      if (updated) {
+        const wasProtected = Boolean(channel.passwordHash);
         for (const user of sessions.list()) {
           if (user.channelId !== channel.id) continue;
-          if (user.role === 'admin' || sessions.isChannelUnlocked(user.id, channel.id)) continue;
+          if (user.role === 'admin') continue;
+          if (canAccessChannel(user, updated)) continue;
           await voice.kick(user.id, 'система');
           sessions.getSocket(user.id)?.emit('toast', {
             type: 'info',
-            text: `Канал «${channel.name}» защищён паролем`,
+            text:
+              typeof passwordHash === 'string' && !wasProtected
+                ? `Канал «${channel.name}» защищён паролем`
+                : `Канал «${channel.name}» больше не доступен вам`,
           });
         }
       }
@@ -985,6 +1092,14 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Пользователь не в сети' });
         return;
       }
+      const target = sessions.get(targetId);
+      if (
+        me.role === 'moderator' &&
+        (target?.role === 'admin' || target?.role === 'moderator')
+      ) {
+        ack?.({ ok: false, error: 'Модератор не может управлять администраторами' });
+        return;
+      }
       await voice.applyServerMute(targetId, Boolean(muted));
       sessions.getSocket(targetId)?.emit('toast', {
         type: muted ? 'info' : 'ok',
@@ -1011,7 +1126,73 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Пользователь не в голосовом канале' });
         return;
       }
+      if (
+        me.role === 'moderator' &&
+        (target.role === 'admin' || target.role === 'moderator')
+      ) {
+        ack?.({ ok: false, error: 'Модератор не может управлять администраторами' });
+        return;
+      }
       await voice.kick(targetId, me.displayName);
+      ack?.({ ok: true });
+    }),
+  );
+
+  socket.on(
+    'mod:moveUser',
+    safe(async ({ userId: targetId, channelId }, ack) => {
+      const me = sessions.get(userId);
+      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+        ack?.({ ok: false, error: 'Недостаточно прав' });
+        return;
+      }
+      if (targetId === userId) {
+        ack?.({ ok: false, error: 'Переключите себя через список каналов' });
+        return;
+      }
+      const target = sessions.get(targetId);
+      if (!target) {
+        ack?.({ ok: false, error: 'Пользователь не в сети' });
+        return;
+      }
+      if (!target.channelId) {
+        ack?.({ ok: false, error: 'Пользователь не в голосовом канале' });
+        return;
+      }
+      if (target.channelId === channelId) {
+        ack?.({ ok: true });
+        return;
+      }
+      if (
+        me.role === 'moderator' &&
+        (target.role === 'admin' || target.role === 'moderator')
+      ) {
+        ack?.({ ok: false, error: 'Модератор не может перемещать администраторов' });
+        return;
+      }
+      const channel = store.channels().find((item) => item.id === channelId);
+      if (!channel || channel.type !== 'voice') {
+        ack?.({ ok: false, error: 'Голосовой канал не найден' });
+        return;
+      }
+      if (!isChannelVisible(target, channel)) {
+        ack?.({ ok: false, error: 'Этот канал недоступен пользователю' });
+        return;
+      }
+      if (
+        channel.passwordProtected &&
+        target.role !== 'admin' &&
+        !sessions.isChannelUnlocked(targetId, channel.id)
+      ) {
+        ack?.({ ok: false, error: 'Канал защищён паролем' });
+        return;
+      }
+      await voice.leave(targetId);
+      sessions.getSocket(targetId)?.emit('voice:moved', {
+        channelId: channel.id,
+        channelName: channel.name,
+        byName: me.displayName,
+      });
       ack?.({ ok: true });
     }),
   );
@@ -1037,6 +1218,10 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Нельзя блокировать администратора' });
         return;
       }
+      if (me.role === 'moderator' && target.role === 'moderator') {
+        ack?.({ ok: false, error: 'Модератор не может блокировать модераторов' });
+        return;
+      }
       store.setBanned(targetId, Boolean(banned));
       if (banned) {
         sessions.endSession(targetId, 'Вы заблокированы администратором');
@@ -1049,7 +1234,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:setRole',
     safe(async ({ userId: targetId, role }, ack) => {
       const me = sessions.get(userId);
-      if (!me || me.role !== 'admin') {
+      if (!me || (me.role !== 'admin' && me.role !== 'moderator')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
@@ -1057,16 +1242,68 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Нельзя изменить свою роль' });
         return;
       }
+      const nextRole = role as BaseRole;
+      if (!BASE_ROLES.includes(nextRole)) {
+        ack?.({ ok: false, error: 'Некорректная роль' });
+        return;
+      }
       const target = store.userById(targetId);
       if (!target) {
         ack?.({ ok: false, error: 'Пользователь не найден' });
         return;
       }
-      store.setRole(targetId, role === 'admin' ? 'admin' : 'member');
-      if (sessions.has(targetId)) sessions.update(targetId, { role });
-      else sessions.broadcastUsers();
-      emitGroups();
-      voice.onPermissionsChanged();
+      if (me.role === 'moderator' && (target.role !== 'guest' || nextRole !== 'member')) {
+        ack?.({
+          ok: false,
+          error: 'Модератор может назначить гостю только роль Пользователь',
+        });
+        return;
+      }
+      if (target.role === 'admin' && nextRole !== 'admin' && store.countAdmins() <= 1) {
+        ack?.({ ok: false, error: 'Нельзя снять роль у последнего администратора' });
+        return;
+      }
+      if (target.role !== nextRole) {
+        store.setRole(targetId, nextRole);
+        if (sessions.has(targetId)) sessions.update(targetId, { role: nextRole });
+        else sessions.broadcastUsers();
+        sessions.getSocket(targetId)?.emit('toast', {
+          type: 'ok',
+          text: `Ваша роль на сервере: ${BASE_ROLE_LABELS[nextRole]}`,
+        });
+        emitChannels();
+        emitGroups();
+        voice.onPermissionsChanged();
+        await enforceChannelAccess();
+      }
+      ack?.({ ok: true });
+    }),
+  );
+
+  socket.on(
+    'mod:setLabel',
+    safe(async ({ userId: targetId, label }, ack) => {
+      const me = sessions.get(userId);
+      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+        ack?.({ ok: false, error: 'Недостаточно прав' });
+        return;
+      }
+      const onlineTarget = sessions.get(targetId);
+      const storedTarget = store.userById(targetId);
+      if (!onlineTarget && !storedTarget) {
+        ack?.({ ok: false, error: 'Пользователь не найден' });
+        return;
+      }
+      const text =
+        typeof label === 'string'
+          ? label.replace(/[\r\n\t]+/g, ' ').trim().slice(0, MAX_LABEL_LENGTH)
+          : '';
+      if (storedTarget) store.setLabel(targetId, text);
+      if (onlineTarget) {
+        sessions.update(targetId, { label: text || undefined });
+      } else {
+        sessions.broadcastUsers();
+      }
       ack?.({ ok: true });
     }),
   );
@@ -1094,8 +1331,10 @@ io.on('connection', async (socket: AppSocket) => {
       }
       if (sessions.has(targetId)) sessions.update(targetId, { roleIds: updated.roleIds });
       else sessions.broadcastUsers();
+      emitChannels();
       emitGroups();
       voice.onPermissionsChanged();
+      await enforceChannelAccess();
       ack?.({ ok: true });
     }),
   );
@@ -1104,7 +1343,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:authorizeGuest',
     safe(async ({ userId: targetId }, ack) => {
       const me = sessions.get(userId);
-      if (!me || me.role !== 'admin') {
+      if (!me || (me.role !== 'admin' && me.role !== 'moderator')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
@@ -1118,6 +1357,7 @@ io.on('connection', async (socket: AppSocket) => {
           id: target.id,
           displayName: target.displayName,
         });
+        if (target.label) store.setLabel(targetId, target.label);
         sessions.update(targetId, {
           username: result.username,
           role: result.account.role,
@@ -1130,11 +1370,12 @@ io.on('connection', async (socket: AppSocket) => {
         sessions.getSocket(targetId)?.emit('session:token', { token: result.token });
         sessions.getSocket(targetId)?.emit('toast', {
           type: 'ok',
-          text: 'Администратор авторизовал вас — доступны каналы для участников',
+          text: 'Вам назначена роль Пользователь — доступны каналы для участников',
         });
         emitChannels();
         emitGroups();
         voice.onPermissionsChanged();
+        await enforceChannelAccess();
         ack?.({ ok: true, username: result.username, password: result.password });
       } catch (error) {
         ack?.({
@@ -1161,7 +1402,7 @@ io.on('connection', async (socket: AppSocket) => {
 // ---------- startup ----------
 
 async function bootstrapAdmin(): Promise<void> {
-  if (store.adminUsers().length > 0) return;
+  if (store.users().length > 0) return;
   const username = config.bootstrapAdminLogin.trim();
   const password = config.bootstrapAdminPassword;
   if (!username || !password) return;
@@ -1179,13 +1420,14 @@ async function bootstrapAdmin(): Promise<void> {
 async function main(): Promise<void> {
   await bootstrapAdmin();
   await voice.start();
+  stats.start();
 
   httpServer.listen(config.port, config.host, () => {
     console.log(`[server] ${config.serverName} ${APP_VERSION} слушает http://${config.host}:${config.port}`);
     console.log(
       `[server] ANNOUNCED_IP=${config.announcedIp}, RTC ${config.rtcMinPort}-${config.rtcMaxPort}, до ${config.maxParticipants} участников`,
     );
-    console.log(`[server] первый зарегистрированный аккаунт получает роль администратора`);
+    console.log(`[server] первый зарегистрированный аккаунт получает роль администратора, новые — гостя`);
   });
 }
 
@@ -1197,6 +1439,7 @@ async function shutdown(signal: string): Promise<void> {
   io.close();
   httpServer.close();
   await voice.close().catch(() => undefined);
+  stats.stop();
   store.flush();
   process.exit(0);
 }

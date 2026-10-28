@@ -6,6 +6,7 @@ import type {
   PublicServerConfig,
   Role,
   RolePermissions,
+  OnlineStatsSummary,
 } from '@tsds/shared';
 
 export type { PublicServerConfig } from '@tsds/shared';
@@ -59,6 +60,12 @@ export const api = {
       token,
     ),
   adminUsers: (token: string) => request<{ users: AdminUser[] }>('/api/admin/users', {}, token),
+  adminStats: (token: string, days: number) =>
+    request<{ stats: OnlineStatsSummary; online: number }>(
+      `/api/admin/stats?days=${days}`,
+      {},
+      token,
+    ),
   adminInvite: (token: string) => request<InviteSettings>('/api/admin/invite', {}, token),
   setInviteRequired: (token: string, inviteRequired: boolean) =>
     request<InviteSettings>(

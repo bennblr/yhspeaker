@@ -1,11 +1,40 @@
 import {
+  BASE_ROLE_LABELS,
   hasAnyPermission,
   hasPermission,
+  type BaseRole,
   type OnlineUser,
   type PermissionKey,
   type Role,
 } from '@tsds/shared';
 import { useApp } from './store';
+
+export const BASE_ROLE_META: { key: BaseRole; label: string; hint: string; color: string }[] = [
+  {
+    key: 'guest',
+    label: BASE_ROLE_LABELS.guest,
+    hint: 'Только каналы, открытые для гостей. Выдаётся при регистрации и входе гостем.',
+    color: '#f59e0b',
+  },
+  {
+    key: 'member',
+    label: BASE_ROLE_LABELS.member,
+    hint: 'Видит каналы, открытые для пользователей и его ролей. Базовый уровень аккаунта.',
+    color: '#38bdf8',
+  },
+  {
+    key: 'moderator',
+    label: BASE_ROLE_LABELS.moderator,
+    hint: 'Видит все каналы, может перемещать участников и назначать гостю роль Пользователь.',
+    color: '#22c55e',
+  },
+  {
+    key: 'admin',
+    label: BASE_ROLE_LABELS.admin,
+    hint: 'Всё, что может модератор, плюс управление ролями и назначение любых ролей.',
+    color: '#6c7cff',
+  },
+];
 
 export const PERMISSION_META: { key: PermissionKey; label: string; hint: string }[] = [
   { key: 'broadcast', label: 'Вещание', hint: 'Говорить во все голосовые каналы и группы слушателей' },
@@ -58,8 +87,9 @@ export function roleLabel(
   roles: Role[],
 ): string {
   if (user.role === 'admin') return 'администратор';
-  if (user.isGuest) return 'гость';
-  return primaryRole(user, roles)?.name ?? 'участник';
+  if (user.role === 'moderator') return 'модератор';
+  if (user.role === 'guest') return 'гость';
+  return primaryRole(user, roles)?.name ?? 'пользователь';
 }
 
 export function useCan(permission: PermissionKey): boolean {

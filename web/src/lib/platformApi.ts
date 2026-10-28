@@ -1,3 +1,5 @@
+import type { OnlineStatsSummary } from '@tsds/shared';
+
 export type PlatformStatus = 'starting' | 'running' | 'stopped' | 'error';
 
 export interface PlatformServer {
@@ -141,6 +143,12 @@ export const platformApi = {
     ),
   credentials: (token: string, id: string) =>
     request<TenantCredentials>(`/servers/${encodeURIComponent(id)}/credentials`, {}, token),
+  stats: (token: string, id: string, days: number) =>
+    request<{ stats: OnlineStatsSummary }>(
+      `/servers/${encodeURIComponent(id)}/stats?days=${days}`,
+      {},
+      token,
+    ),
   remove: (token: string, id: string, confirmName: string) =>
     request<{ ok: boolean; archivedTo: string | null }>(
       `/servers/${encodeURIComponent(id)}`,

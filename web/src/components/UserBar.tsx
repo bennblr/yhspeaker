@@ -7,11 +7,13 @@ import {
   Power,
   Settings,
   Shield,
+  ShieldCheck,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
+import { LabelBadge } from './LabelBadge';
 import { isSelfMicMuted, useApp } from '../lib/store';
 import { cn } from '../lib/utils';
-import { primaryRole, useIsStaff } from '../lib/roles';
+import { primaryRole, roleLabel, useIsStaff } from '../lib/roles';
 import { logout, toggleDeafen, toggleMute, toggleMic } from '../lib/actions';
 
 function TipButton({
@@ -69,8 +71,7 @@ export function UserBar({
 
   const inVoice = Boolean(voice.channelId);
   const primary = primaryRole(me, roles);
-  const roleLabel =
-    me.role === 'admin' ? 'администратор' : me.isGuest ? 'гость' : (primary?.name ?? 'участник');
+  const roleText = roleLabel(me, roles);
 
   return (
     <div className="flex items-center gap-2 border-t border-line bg-[#0d1017] px-2.5 py-2.5">
@@ -91,16 +92,20 @@ export function UserBar({
           >
             {me.displayName}
           </span>
+          <LabelBadge label={me.label} />
           {me.role === 'admin' && <Shield className="h-3 w-3 shrink-0 text-accent" />}
+          {me.role === 'moderator' && (
+            <ShieldCheck className="h-3 w-3 shrink-0 text-ok" />
+          )}
         </div>
         <div className="flex items-center gap-1.5 truncate text-[10px] uppercase tracking-wider text-muted">
-          {primary && me.role !== 'admin' && (
+          {primary && me.role === 'member' && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full"
               style={{ backgroundColor: primary.color }}
             />
           )}
-          {me.serverMuted ? 'микрофон отключён админом' : roleLabel}
+          {me.serverMuted ? 'микрофон отключён админом' : roleText}
         </div>
       </div>
 

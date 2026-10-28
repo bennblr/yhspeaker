@@ -1,6 +1,7 @@
 import * as mediasoup from 'mediasoup';
 import {
   hasPermission,
+  isChannelVisible,
   type AckResult,
   type ConsumerParams,
   type MediaKind,
@@ -99,7 +100,8 @@ export class VoiceManager {
     this.observer = await this.router.createAudioLevelObserver({
       maxEntries: 8,
       threshold: -60,
-      interval: 400,
+      // Индикатор речи должен зажигаться почти сразу, но без лишней нагрузки на воркер.
+      interval: 200,
     });
 
     this.observer.on('volumes', (volumes) => {
@@ -175,8 +177,8 @@ export class VoiceManager {
     }
     const online = this.sessions.get(userId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
-    if (online.role === 'guest' && !channel.guest) {
-      return { ok: false, error: 'Гостям доступен только гостевой канал' };
+    if (!isChannelVisible(online, channel)) {
+      return { ok: false, error: 'Этот канал недоступен вам' };
     }
     if (
       online.role !== 'admin' &&

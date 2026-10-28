@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare, Send, Shield, Trash2 } from 'lucide-react';
+import { MessageSquare, Send, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import type { ChatMessage } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
 import { sendChatMessage } from '../lib/actions';
 import { getSocket } from '../lib/socket';
@@ -125,17 +126,26 @@ export function Chat({ channelId, placeholder }: { channelId: string; placeholde
                               'text-[13px] font-semibold',
                               message.role === 'admin'
                                 ? 'text-accent'
-                                : message.role === 'guest'
-                                  ? 'text-amber-300'
-                                  : 'text-slate-100',
+                                : message.role === 'moderator'
+                                  ? 'text-ok'
+                                  : message.role === 'guest'
+                                    ? 'text-amber-300'
+                                    : 'text-slate-100',
                             )}
                           >
                             {message.displayName}
                           </span>
+                          <LabelBadge label={message.label} />
                           {message.role === 'admin' && (
                             <span className="flex items-center gap-1 rounded bg-accent/15 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-accent">
                               <Shield className="h-2.5 w-2.5" />
                               админ
+                            </span>
+                          )}
+                          {message.role === 'moderator' && (
+                            <span className="flex items-center gap-1 rounded bg-ok/15 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-ok">
+                              <ShieldCheck className="h-2.5 w-2.5" />
+                              модер
                             </span>
                           )}
                           {message.role === 'guest' && (

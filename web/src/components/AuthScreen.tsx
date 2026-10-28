@@ -4,7 +4,6 @@ import {
   Headphones,
   KeyRound,
   Loader2,
-  Mic,
   MonitorUp,
   Radio,
   ShieldCheck,
@@ -287,7 +286,8 @@ export function AuthScreen({ config }: { config: PublicServerConfig | null }) {
 
             {tab === 'register' && (
               <p className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-xs leading-relaxed text-slate-400">
-                Первый зарегистрированный аккаунт автоматически получает права администратора.
+                Первый зарегистрированный аккаунт получает права администратора, остальные —
+                роль Гость. Администратор назначит роль Пользователь или Модератор.
               </p>
             )}
 
@@ -296,7 +296,8 @@ export function AuthScreen({ config }: { config: PublicServerConfig | null }) {
                 {inviteRequired
                   ? 'Код приглашения выдаёт администратор сервера.'
                   : 'Код приглашения не требуется — достаточно указать имя.'}{' '}
-                Гость попадает в гостевой канал; остальные каналы открывает администратор.
+                Гость попадает в гостевой канал; остальные каналы откроет администратор или
+                модератор.
               </p>
             )}
 
@@ -315,11 +316,6 @@ export function AuthScreen({ config }: { config: PublicServerConfig | null }) {
               {tab === 'login' ? 'Войти' : tab === 'register' ? 'Создать аккаунт' : 'Войти гостем'}
             </button>
           </form>
-
-          <div className="mt-6 flex items-center justify-center gap-2 text-[11px] text-muted">
-            <Mic className="h-3.5 w-3.5" />
-            Для микрофона нужен HTTPS или localhost
-          </div>
         </div>
       </div>
     </div>

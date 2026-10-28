@@ -51,6 +51,7 @@ export interface AppState {
   messages: Record<string, ChatMessage[]>;
   unread: Record<string, number>;
   speaking: string[];
+  localMuted: string[];
   settings: MicSettings;
   voice: VoiceState;
   toasts: Toast[];
@@ -70,6 +71,7 @@ export interface AppState {
   addMessage: (message: ChatMessage) => void;
   removeMessage: (channelId: string, messageId: string) => void;
   setSpeaking: (userIds: string[]) => void;
+  toggleLocalMute: (userId: string) => void;
   setSettings: (patch: Partial<MicSettings>) => void;
   patchVoice: (patch: Partial<VoiceState>) => void;
   setLocalScreen: (stream: MediaStream | null) => void;
@@ -81,7 +83,17 @@ export interface AppState {
 }
 
 const lastChannel = localStorage.getItem('yhspeak.lastChannel');
+const LOCAL_MUTED_KEY = 'yhspeak.localMuted';
 let toastSeq = 0;
+
+function loadLocalMuted(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LOCAL_MUTED_KEY) ?? '[]') as unknown;
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 function canOpenChannel(channel: Channel, unlocked: string[], isAdmin: boolean): boolean {
   return !channel.passwordProtected || isAdmin || unlocked.includes(channel.id);
@@ -115,6 +127,7 @@ export const useApp = create<AppState>((set, get) => ({
   messages: {},
   unread: {},
   speaking: [],
+  localMuted: loadLocalMuted(),
   settings: loadSettings(),
   voice: {
     channelId: null,
@@ -241,6 +254,20 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSpeaking: (userIds) => set({ speaking: userIds }),
+
+  toggleLocalMute: (userId) => {
+    const state = get();
+    const active = state.localMuted.includes(userId);
+    const localMuted = active
+      ? state.localMuted.filter((id) => id !== userId)
+      : [...state.localMuted, userId];
+    localStorage.setItem(LOCAL_MUTED_KEY, JSON.stringify(localMuted));
+    set({ localMuted });
+    state.pushToast(
+      'info',
+      active ? 'Звук участника снова включён' : 'Участник заглушён только у вас',
+    );
+  },
 
   setSettings: (patch) => {
     const next = { ...get().settings, ...patch };

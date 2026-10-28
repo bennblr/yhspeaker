@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Ban,
+  BarChart3,
   Check,
   Copy,
   Hash,
@@ -15,7 +16,7 @@ import {
   RefreshCw,
   Shield,
   ShieldCheck,
-  ShieldOff,
+  Tag,
   Trash2,
   UserCheck,
   UserX,
@@ -23,29 +24,33 @@ import {
   Volume2,
 } from 'lucide-react';
 import {
+  BASE_ROLES,
   MAX_GROUP_NAME,
   MAX_ROLE_NAME,
   NO_PERMISSIONS,
   hasAnyPermission,
   hasPermission,
   type AdminUser,
+  type BaseRole,
   type BroadcastGroup,
   type Channel,
   type ChannelType,
   type OnlineUser,
+  type OnlineStatsSummary,
   type Role,
   type RolePermissions,
 } from '@tsds/shared';
 import { Modal } from './Modal';
 import { Avatar } from './Avatar';
+import { LabelBadge } from './LabelBadge';
 import { api, type InviteSettings } from '../lib/api';
 import { useApp } from '../lib/store';
 import { getSocket } from '../lib/socket';
 import { toast } from '../lib/actions';
-import { PERMISSION_META, ROLE_COLORS, roleColor, roleLabel, userRoleList } from '../lib/roles';
+import { BASE_ROLE_META, PERMISSION_META, ROLE_COLORS, roleColor, roleLabel, userRoleList } from '../lib/roles';
 import { cn, formatDate } from '../lib/utils';
 
-type Tab = 'channels' | 'roles' | 'groups' | 'online' | 'accounts' | 'invite';
+type Tab = 'channels' | 'roles' | 'groups' | 'online' | 'accounts' | 'stats' | 'invite';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'channels', label: 'Каналы' },
@@ -53,8 +58,18 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'groups', label: 'Группы' },
   { id: 'online', label: 'В сети' },
   { id: 'accounts', label: 'Аккаунты' },
+  { id: 'stats', label: 'Статистика' },
   { id: 'invite', label: 'Приглашение' },
 ];
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  if (minutes > 0) return `${minutes} мин`;
+  return `${total} с`;
+}
 
 async function copyText(text: string): Promise<void> {
   try {
@@ -81,6 +96,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [type, setType] = useState<ChannelType>('voice');
   const [channelPassword, setChannelPassword] = useState('');
   const [removeChannelPassword, setRemoveChannelPassword] = useState(false);
+  const [guestVisible, setGuestVisible] = useState(true);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [channelBusy, setChannelBusy] = useState(false);
   const [accounts, setAccounts] = useState<AdminUser[] | null>(null);
@@ -97,6 +113,10 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [rolePermissions, setRolePermissions] = useState<RolePermissions>({ ...NO_PERMISSIONS });
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [roleBusy, setRoleBusy] = useState(false);
+  const [stats, setStats] = useState<OnlineStatsSummary | null>(null);
+  const [statsOnline, setStatsOnline] = useState(0);
+  const [statsDays, setStatsDays] = useState(7);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const canChannels = hasPermission(me, roles, 'channels');
   const canRoles = hasPermission(me, roles, 'roles');
@@ -105,6 +125,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
   const canInvite = hasPermission(me, roles, 'invite');
   const canSeeAccounts = canModerate || canRoles || canGroups;
   const isAdmin = me?.role === 'admin';
+  const isModerator = me?.role === 'moderator';
   const guestLink = invite
     ? `${window.location.origin}/?guest=${encodeURIComponent(invite.code)}`
     : '';
@@ -119,6 +140,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     if (item.id === 'groups') return canGroups;
     if (item.id === 'online') return canModerate;
     if (item.id === 'accounts') return canSeeAccounts;
+    if (item.id === 'stats') return canModerate;
     return canInvite;
   });
 
@@ -142,6 +164,25 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     }
   }, [token]);
 
+  const loadStats = useCallback(async (days: number) => {
+    if (!token) return;
+    setStatsLoading(true);
+    try {
+      const result = await api.adminStats(token, days);
+      setStats(result.stats);
+      setStatsOnline(result.online);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : 'Не удалось загрузить статистику');
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!open || tab !== 'stats') return;
+    void loadStats(statsDays);
+  }, [open, tab, statsDays, loadStats]);
+
   useEffect(() => {
     if (!open) return;
     if (canSeeAccounts) void loadAccounts();
@@ -162,6 +203,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
       setType('voice');
       setChannelPassword('');
       setRemoveChannelPassword(false);
+      setGuestVisible(true);
       setEditingChannelId(null);
       setChannelBusy(false);
       setBusyKey(null);
@@ -182,6 +224,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     setType('voice');
     setChannelPassword('');
     setRemoveChannelPassword(false);
+    setGuestVisible(true);
     setEditingChannelId(null);
   }
 
@@ -191,6 +234,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     setType(channel.type);
     setChannelPassword('');
     setRemoveChannelPassword(false);
+    setGuestVisible(channel.guest || channel.visibleRoles.includes('guest'));
   }
 
   function saveChannel() {
@@ -215,10 +259,22 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
       resetChannelForm();
       toast('ok', wasEditing ? `Канал «${value}» обновлён` : `Канал «${value}» создан`);
     };
+    const visibility = passwordLocked
+      ? { visibleRoles: [...BASE_ROLES], visibleRoleIds: [] }
+      : {
+          visibleRoles: guestVisible
+            ? [...BASE_ROLES]
+            : (['member', 'moderator', 'admin'] as BaseRole[]),
+          visibleRoleIds: [],
+        };
     if (editingChannelId) {
-      socket.emit('admin:updateChannel', { channelId: editingChannelId, name: value, password }, done);
+      socket.emit(
+        'admin:updateChannel',
+        { channelId: editingChannelId, name: value, password, ...visibility },
+        done,
+      );
     } else {
-      socket.emit('admin:createChannel', { name: value, type, password }, done);
+      socket.emit('admin:createChannel', { name: value, type, password, ...visibility }, done);
     }
   }
 
@@ -435,6 +491,11 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
 
   const onlineIds = new Set(users.map((user) => user.id));
 
+  function visibilityText(channel: Channel): string {
+    if (channel.guest) return 'виден всем';
+    return channel.visibleRoles.includes('guest') ? 'виден всем' : 'скрыт от гостей';
+  }
+
   return (
     <Modal
       open={open}
@@ -572,6 +633,37 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
                   Гостевой канал всегда открыт — пароль для него недоступен.
                 </p>
               )}
+              <div className="rounded-lg border border-line bg-panel/40 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
+                  Доступ гостей
+                </span>
+                <label
+                  className={cn(
+                    'mt-2 flex items-start gap-2 rounded-lg border px-2.5 py-2 transition',
+                    guestVisible || passwordLocked
+                      ? 'border-accent/40 bg-accent/[0.07]'
+                      : 'border-line bg-panel hover:bg-panel3',
+                    passwordLocked && 'cursor-default opacity-80',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#6c7cff]"
+                    checked={guestVisible || passwordLocked}
+                    disabled={passwordLocked}
+                    onChange={(event) => setGuestVisible(event.target.checked)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-slate-200">
+                      Виден гостям
+                    </span>
+                    <span className="block text-[10px] leading-snug text-muted">
+                      Пользователи, модераторы и админы видят все каналы. Гостевой канал
+                      открыт всем, его видимость не настраивается.
+                    </span>
+                  </span>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -606,6 +698,8 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
                     <div className="text-[10px] uppercase tracking-wider text-muted">
                       {channel.type === 'voice' ? 'голосовой' : 'текстовый'}
                       {channel.type === 'voice' && ` · ${count} в канале`}
+                      {' · '}
+                      {visibilityText(channel)}
                     </div>
                   </div>
                   <button
@@ -643,6 +737,30 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
 
       {tab === 'roles' && (
         <div className="space-y-5">
+          <div className="rounded-xl border border-line bg-panel/40 p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
+              <ShieldCheck className="h-4 w-4 text-accent" />
+              Базовые роли
+            </div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {BASE_ROLE_META.map((meta) => (
+                <div
+                  key={meta.key}
+                  className="rounded-lg border border-line bg-panel px-2.5 py-2"
+                >
+                  <div className="text-xs font-semibold" style={{ color: meta.color }}>
+                    {meta.label}
+                  </div>
+                  <div className="text-[10px] leading-snug text-muted">{meta.hint}</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-muted">
+              Базовую роль назначает администратор во вкладке «Аккаунты». Модератор может выдать
+              гостю только роль Пользователь.
+            </p>
+          </div>
+
           <div className="rounded-xl border border-line bg-panel/60 p-4">
             <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
               {editingRoleId ? (
@@ -798,11 +916,12 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
           <div className="rounded-xl border border-line bg-panel/40 p-4 text-[11px] leading-relaxed text-muted">
             <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-slate-300">
               <ShieldCheck className="h-3.5 w-3.5 text-accent" />
-              Как работают роли
+              Как работают дополнительные роли
             </div>
-            Роль — это набор прав: вещание, модерация, каналы, управление ролями, группы
-            слушателей и приглашения. Роли выдаются зарегистрированным участникам во вкладке
-            «Аккаунты». Администратор всегда обладает всеми правами.
+            Дополнительная роль — это набор прав: вещание, модерация, каналы, управление ролями,
+            группы слушателей и приглашения. Она выдаётся поверх базовой роли во вкладке
+            «Аккаунты» и может открывать участнику доступ к закрытым каналам. Администратор
+            всегда обладает всеми правами и управляет ролями.
           </div>
         </div>
       )}
@@ -946,24 +1065,27 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
               key={user.id}
               user={user}
               roles={roles}
+              channels={channels}
               selfId={me.id}
               canModerate={canModerate}
-              canAppointAdmin={isAdmin}
-              canAuthorizeGuest={isAdmin}
+              canAssignBaseRole={isAdmin}
+              canPromoteGuest={isModerator}
+              canAuthorizeGuest={isAdmin || isModerator}
               busy={busyKey === `online:${user.id}`}
               onAction={(key, emit) => runMod(`online:${user.id}`, emit)}
             />
           ))}
           {users.length === 0 && <Empty text="Сейчас никого нет в сети." />}
-          {isAdmin && (
+          {(isAdmin || isModerator) && (
             <div className="mt-4 rounded-xl border border-line bg-panel/40 p-4 text-[11px] leading-relaxed text-muted">
               <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-slate-300">
                 <UserCheck className="h-3.5 w-3.5 text-ok" />
-                Авторизация гостей
+                Роли и перемещение
               </div>
-              Кнопка с галочкой рядом с гостем превращает его в участника: он получает доступ к
-              каналам для участников и сохраняется в «Аккаунтах». Сгенерированные логин и пароль
-              показываются один раз — передайте их гостю.
+              Администратор меняет базовую роль участника в списке. Модератор видит все каналы,
+              может перемещать участников между каналами и назначать гостю роль Пользователь.
+              Кнопка с галочкой у гостя создаёт аккаунт и сразу выдаёт роль Пользователь —
+              сгенерированные логин и пароль показываются один раз.
             </div>
           )}
         </div>
@@ -986,13 +1108,202 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
               online={onlineIds.has(account.id)}
               canModerate={canModerate}
               canAssignRoles={canRoles}
-              canAppointAdmin={isAdmin}
+              canAssignBaseRole={isAdmin}
+              canPromoteGuest={isModerator}
               busy={busyKey === `account:${account.id}`}
               onAction={(emit) => runMod(`account:${account.id}`, emit)}
               onRolesSaved={() => void loadAccounts()}
             />
           ))}
           {accounts?.length === 0 && <Empty text="Зарегистрированных аккаунтов нет." />}
+        </div>
+      )}
+
+      {tab === 'stats' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 7, 30, 90].map((days) => (
+              <button
+                key={days}
+                className={cn(
+                  'btn-ghost h-8 px-3 text-xs',
+                  statsDays === days && 'border-accent/40 bg-accent/10 text-accent',
+                )}
+                onClick={() => setStatsDays(days)}
+                disabled={statsLoading}
+              >
+                {days === 1 ? 'Сутки' : `${days} дней`}
+              </button>
+            ))}
+            <span className="ml-auto flex items-center gap-2 text-xs text-muted">
+              Сейчас в сети: <b className="text-slate-200">{statsOnline}</b>
+            </span>
+            <button
+              className="icon-btn h-8 w-8"
+              title="Обновить"
+              onClick={() => void loadStats(statsDays)}
+              disabled={statsLoading}
+            >
+              <RefreshCw className={cn('h-4 w-4', statsLoading && 'animate-spin')} />
+            </button>
+          </div>
+
+          {!stats ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted" />
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="card px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Пиковый онлайн
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-100">{stats.peak}</p>
+                </div>
+                <div className="card px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Средний онлайн
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-100">
+                    {stats.average.toFixed(1)}
+                  </p>
+                </div>
+                <div className="card px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Участников
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-100">
+                    {stats.uniqueUsers}
+                  </p>
+                </div>
+                <div className="card px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Суммарный онлайн
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-100">
+                    {formatDuration(stats.totalSeconds)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-line bg-panel/40 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+                    <BarChart3 className="h-3.5 w-3.5 text-accent" />
+                    Средний онлайн по времени
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted">
+                    интервал {Math.round(stats.bucketMs / 3_600_000)} ч
+                  </span>
+                </div>
+                {stats.timeline.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-muted">
+                    Данных пока нет — статистика собирается каждые 30 секунд.
+                  </p>
+                ) : (
+                  <div className="flex h-32 items-end gap-[2px] overflow-x-auto">
+                    {stats.timeline.map((point) => {
+                      const max = Math.max(1, stats.peak);
+                      return (
+                        <div
+                          key={point.t}
+                          className="min-w-[5px] flex-1 rounded-t bg-accent/70 transition hover:bg-accent"
+                          style={{ height: `${Math.max(2, (point.avg / max) * 100)}%` }}
+                          title={`${new Date(point.t).toLocaleString('ru-RU', {
+                            day: '2-digit',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })} · средний ${point.avg.toFixed(1)}, пик ${point.peak}`}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-line">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-panel3/60 text-[10px] uppercase tracking-wider text-muted">
+                    <tr>
+                      <th className="px-3 py-2">День</th>
+                      <th className="px-3 py-2">Пик</th>
+                      <th className="px-3 py-2">Средний</th>
+                      <th className="px-3 py-2">Участников</th>
+                      <th className="px-3 py-2">Онлайн</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.daily.map((day) => (
+                      <tr key={day.date} className="border-t border-line/60">
+                        <td className="px-3 py-1.5 text-slate-300">{day.date}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.peak}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.average.toFixed(1)}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.users}</td>
+                        <td className="px-3 py-1.5 text-slate-200">
+                          {formatDuration(day.seconds)}
+                        </td>
+                      </tr>
+                    ))}
+                    {stats.daily.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-4 text-center text-muted">
+                          Нет данных за период
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-line">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-panel3/60 text-[10px] uppercase tracking-wider text-muted">
+                    <tr>
+                      <th className="px-3 py-2">Участник</th>
+                      <th className="px-3 py-2">Время в сети</th>
+                      <th className="px-3 py-2">Сессий</th>
+                      <th className="px-3 py-2">Был(а)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.users.map((user) => (
+                      <tr key={user.userId} className="border-t border-line/60">
+                        <td className="px-3 py-1.5 text-slate-300">
+                          {user.displayName}
+                          {user.guest && (
+                            <span className="ml-1.5 rounded bg-amber-400/10 px-1 py-0.5 text-[9px] uppercase text-amber-300">
+                              гость
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-200">
+                          {formatDuration(user.seconds)}
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-200">{user.sessions}</td>
+                        <td className="px-3 py-1.5 text-muted">
+                          {new Date(user.lastSeen).toLocaleString('ru-RU', {
+                            day: '2-digit',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                    {stats.users.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-4 text-center text-muted">
+                          Нет данных об участниках
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -1025,8 +1336,8 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
                     <>
                       <p className="mt-3 text-[11px] leading-relaxed text-muted">
                         Отправьте ссылку — гость введёт только имя, без регистрации. Он попадёт в
-                        гостевой канал; чтобы открыть остальные каналы, авторизуйте его во вкладке
-                        «В сети».
+                        гостевой канал; чтобы открыть остальные каналы, назначьте ему роль
+                        Пользователь во вкладке «В сети».
                       </p>
                       <div className="mt-4 flex items-center gap-2">
                         <code className="block min-w-0 flex-1 truncate rounded-lg border border-line bg-bg px-3 py-2.5 font-mono text-xs text-slate-100">
@@ -1090,9 +1401,9 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
               <Shield className="h-3.5 w-3.5 text-accent" />
               Права и роли
             </div>
-            Права выдаются ролями: вещание во все каналы, модерация, управление каналами, ролями,
-            группами слушателей и приглашениями. Настройте роли во вкладке «Роли» и выдайте их
-            участникам в «Аккаунтах». Администратор всегда обладает всеми правами.
+            Базовые роли задают уровень доступа: гость, пользователь, модератор, админ. Права
+            выдаются дополнительными ролями во вкладке «Роли» и назначаются в «Аккаунтах».
+            Администратор всегда обладает всеми правами.
           </div>
         </div>
       )}
@@ -1103,18 +1414,22 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
 function OnlineRow({
   user,
   roles,
+  channels,
   selfId,
   canModerate,
-  canAppointAdmin,
+  canAssignBaseRole,
+  canPromoteGuest,
   canAuthorizeGuest,
   busy,
   onAction,
 }: {
   user: OnlineUser;
   roles: Role[];
+  channels: Channel[];
   selfId: string;
   canModerate: boolean;
-  canAppointAdmin: boolean;
+  canAssignBaseRole: boolean;
+  canPromoteGuest: boolean;
   canAuthorizeGuest: boolean;
   busy: boolean;
   onAction: (
@@ -1126,6 +1441,9 @@ function OnlineRow({
   const self = user.id === selfId;
   const color = roleColor(user, roles);
   const customRoles = userRoleList(user, roles);
+  const moveTargets = channels.filter(
+    (channel) => channel.type === 'voice' && channel.id !== user.channelId,
+  );
 
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel/40 px-3 py-2.5">
@@ -1135,6 +1453,7 @@ function OnlineRow({
           <span className="truncate text-sm text-slate-200" style={color ? { color } : undefined}>
             {user.displayName}
           </span>
+          <LabelBadge label={user.label} />
           {user.role === 'admin' && <Shield className="h-3 w-3 shrink-0 text-accent" />}
           {user.broadcasting && <Radio className="h-3 w-3 shrink-0 text-ok" />}
           {customRoles.map((role) => (
@@ -1153,8 +1472,27 @@ function OnlineRow({
         </div>
       </div>
       {busy && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
-      {!self && (canModerate || canAppointAdmin) && (
+      {!self && (canModerate || canAssignBaseRole || canPromoteGuest || canAuthorizeGuest) && (
         <div className="flex items-center gap-1">
+          {canModerate && (
+            <button
+              className="icon-btn h-8 w-8"
+              title="Подписать участника"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                const next = window.prompt(
+                  'Метка рядом с ником (до 20 символов, пусто — убрать):',
+                  user.label ?? '',
+                );
+                if (next === null) return;
+                onAction('label', (callback) =>
+                  socket?.emit('mod:setLabel', { userId: user.id, label: next }, callback),
+                );
+              }}
+            >
+              <Tag className="h-4 w-4" />
+            </button>
+          )}
           {canModerate && (
             <button
               className="icon-btn h-8 w-8"
@@ -1187,15 +1525,37 @@ function OnlineRow({
               <UserX className="h-4 w-4" />
             </button>
           )}
+          {canModerate && user.channelId && moveTargets.length > 0 && (
+            <select
+              className="input h-8 w-auto py-0 text-[11px]"
+              value=""
+              disabled={Boolean(busy)}
+              title="Переместить в канал"
+              onChange={(event) => {
+                const channelId = event.target.value;
+                if (!channelId) return;
+                onAction('move', (callback) =>
+                  socket?.emit('mod:moveUser', { userId: user.id, channelId }, callback),
+                );
+              }}
+            >
+              <option value="">Переместить…</option>
+              {moveTargets.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
+            </select>
+          )}
           {canAuthorizeGuest && user.isGuest && (
             <button
               className="icon-btn h-8 w-8 hover:bg-ok/15 hover:text-ok"
-              title="Авторизовать гостя — открыть каналы участников"
+              title="Назначить роль Пользователь — открыть каналы участников"
               disabled={Boolean(busy)}
               onClick={() => {
                 if (
                   !window.confirm(
-                    `Авторизовать ${user.displayName}? Гость станет участником и получит доступ к каналам для участников.`,
+                    `Назначить ${user.displayName} роль Пользователь? Аккаунт сохранится в «Аккаунтах».`,
                   )
                 ) {
                   return;
@@ -1204,9 +1564,9 @@ function OnlineRow({
                   socket?.emit('mod:authorizeGuest', { userId: user.id }, (result) => {
                     callback(result);
                     if (result.ok) {
-                      toast('ok', 'Гость авторизован');
+                      toast('ok', 'Назначена роль Пользователь');
                       window.prompt(
-                        'Гость авторизован. Логин и пароль:',
+                        'Гость стал пользователем. Логин и пароль:',
                         `Логин: ${result.username} · Пароль: ${result.password}`,
                       );
                     }
@@ -1217,20 +1577,48 @@ function OnlineRow({
               <UserCheck className="h-4 w-4" />
             </button>
           )}
-          {canAppointAdmin && !user.isGuest && user.role !== 'admin' && (
-            <button
-              className="icon-btn h-8 w-8"
-              title="Назначить администратором"
+          {canAssignBaseRole && !self && !user.isGuest && (
+            <select
+              className="input h-8 w-auto py-0 text-[11px]"
+              value={user.role}
               disabled={Boolean(busy)}
-              onClick={() =>
+              title="Роль участника"
+              onChange={(event) => {
+                const role = event.target.value as BaseRole;
                 onAction('role', (callback) =>
-                  socket?.emit('mod:setRole', { userId: user.id, role: 'admin' }, callback),
-                )
-              }
+                  socket?.emit('mod:setRole', { userId: user.id, role }, callback),
+                );
+              }}
             >
-              <Shield className="h-4 w-4" />
-            </button>
+              {BASE_ROLE_META.map((meta) => (
+                <option key={meta.key} value={meta.key}>
+                  {meta.label}
+                </option>
+              ))}
+            </select>
           )}
+          {canPromoteGuest &&
+            !canAssignBaseRole &&
+            !self &&
+            !user.isGuest &&
+            user.role === 'guest' && (
+              <button
+                className="icon-btn h-8 w-8 hover:bg-ok/15 hover:text-ok"
+                title="Назначить роль Пользователь"
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  onAction('role', (callback) =>
+                    socket?.emit(
+                      'mod:setRole',
+                      { userId: user.id, role: 'member' },
+                      callback,
+                    ),
+                  )
+                }
+              >
+                <UserCheck className="h-4 w-4" />
+              </button>
+            )}
           {canModerate && !user.isGuest && user.role !== 'admin' && (
             <button
               className="icon-btn h-8 w-8 hover:bg-danger/15 hover:text-danger"
@@ -1261,7 +1649,8 @@ function AccountRow({
   online,
   canModerate,
   canAssignRoles,
-  canAppointAdmin,
+  canAssignBaseRole,
+  canPromoteGuest,
   busy,
   onAction,
   onRolesSaved,
@@ -1272,7 +1661,8 @@ function AccountRow({
   online: boolean;
   canModerate: boolean;
   canAssignRoles: boolean;
-  canAppointAdmin: boolean;
+  canAssignBaseRole: boolean;
+  canPromoteGuest: boolean;
   busy: boolean;
   onAction: (
     emit: (callback: (result: { ok: boolean; error?: string }) => void) => void,
@@ -1291,7 +1681,12 @@ function AccountRow({
 
   const color = roleColor(account, roles);
   const assigned = userRoleList(account, roles);
-  const assignable = canAssignRoles && !self && account.role !== 'admin' && !account.isGuest;
+  const assignable =
+    canAssignRoles &&
+    !self &&
+    account.role !== 'admin' &&
+    account.role !== 'guest' &&
+    !account.isGuest;
 
   function toggleRole(roleId: string): void {
     setSelected((current) =>
@@ -1326,6 +1721,7 @@ function AccountRow({
             >
               {account.displayName}
             </span>
+            <LabelBadge label={account.label} />
             <span className="truncate text-[11px] text-muted">@{account.username}</span>
             {account.role === 'admin' && (
               <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-accent">
@@ -1359,6 +1755,25 @@ function AccountRow({
         </div>
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
         <div className="flex items-center gap-1">
+          {canModerate && (
+            <button
+              className="icon-btn h-8 w-8"
+              title="Подписать участника"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                const next = window.prompt(
+                  'Метка рядом с ником (до 20 символов, пусто — убрать):',
+                  account.label ?? '',
+                );
+                if (next === null) return;
+                onAction((callback) =>
+                  socket?.emit('mod:setLabel', { userId: account.id, label: next }, callback),
+                );
+              }}
+            >
+              <Tag className="h-4 w-4" />
+            </button>
+          )}
           {assignable && (
             <button
               className={cn('icon-btn h-8 w-8', panelOpen && 'icon-btn-active')}
@@ -1368,30 +1783,48 @@ function AccountRow({
               <ShieldCheck className="h-4 w-4" />
             </button>
           )}
-          {!self && canAppointAdmin && (
-            <button
-              className="icon-btn h-8 w-8"
-              title={
-                account.role === 'admin' ? 'Снять администратора' : 'Назначить администратором'
-              }
+          {!self && canAssignBaseRole && (
+            <select
+              className="input h-8 w-auto py-0 text-[11px]"
+              value={account.role}
               disabled={Boolean(busy)}
-              onClick={() =>
+              title="Базовая роль"
+              onChange={(event) => {
+                const role = event.target.value as BaseRole;
                 onAction((callback) =>
-                  socket?.emit(
-                    'mod:setRole',
-                    { userId: account.id, role: account.role === 'admin' ? 'member' : 'admin' },
-                    callback,
-                  ),
-                )
-              }
+                  socket?.emit('mod:setRole', { userId: account.id, role }, callback),
+                );
+              }}
             >
-              {account.role === 'admin' ? (
-                <ShieldOff className="h-4 w-4" />
-              ) : (
-                <Shield className="h-4 w-4" />
-              )}
-            </button>
+              {BASE_ROLE_META.map((meta) => (
+                <option key={meta.key} value={meta.key}>
+                  {meta.label}
+                </option>
+              ))}
+            </select>
           )}
+          {!self &&
+            !canAssignBaseRole &&
+            canPromoteGuest &&
+            account.role === 'guest' &&
+            !account.isGuest && (
+              <button
+                className="icon-btn h-8 w-8 hover:bg-ok/15 hover:text-ok"
+                title="Назначить роль Пользователь"
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  onAction((callback) =>
+                    socket?.emit(
+                      'mod:setRole',
+                      { userId: account.id, role: 'member' },
+                      callback,
+                    ),
+                  )
+                }
+              >
+                <UserCheck className="h-4 w-4" />
+              </button>
+            )}
           {!self &&
             canModerate &&
             account.role !== 'admin' &&

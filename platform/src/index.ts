@@ -4,7 +4,14 @@ import http from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { APP_VERSION, MAX_VOICE_PARTICIPANTS, MIN_VOICE_PARTICIPANTS } from '@tsds/shared';
+import {
+  APP_VERSION,
+  MAX_VOICE_PARTICIPANTS,
+  MIN_VOICE_PARTICIPANTS,
+  statsDateKey,
+  summarizeOnlineStats,
+  type OnlineStatsFile,
+} from '@tsds/shared';
 import { PlatformAuth } from './auth.js';
 import { config } from './config.js';
 import { decryptSecret, encryptSecret, randomPassword, randomToken } from './crypto.js';
@@ -264,6 +271,32 @@ platformApi.get('/overview', requireAdmin, (_req, res) => {
     servers: store.servers().map(serverView),
     meta: platformMeta(),
   });
+});
+
+platformApi.get('/servers/:id/stats', requireAdmin, (req, res, next) => {
+  try {
+    const tenant = store.serverById(req.params.id);
+    if (!tenant) throw new HttpError(404, 'Сервер не найден');
+    const raw = Number.parseInt(String(req.query.days ?? '7'), 10);
+    const days = Number.isFinite(raw) ? Math.min(90, Math.max(1, raw)) : 7;
+    const file = path.join(config.dataDir, 'tenants', tenant.id, 'data', 'stats.json');
+    let data: OnlineStatsFile = { version: 1, days: {} };
+    if (fs.existsSync(file)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as OnlineStatsFile;
+        if (parsed?.version === 1 && parsed.days) data = parsed;
+      } catch {
+        /* повреждённый файл — показываем пустую статистику */
+      }
+    }
+    const now = Date.now();
+    const from = now - days * 86_400_000;
+    const cutoff = statsDateKey(from);
+    const list = Object.values(data.days).filter((day) => day.date >= cutoff);
+    res.json({ stats: summarizeOnlineStats(list, from, now) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 platformApi.post(

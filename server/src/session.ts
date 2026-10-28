@@ -18,6 +18,7 @@ export class SessionService {
       id: account.id,
       username: account.username,
       displayName: account.displayName,
+      label: account.label,
       role: account.role,
       roleIds: [...account.roleIds],
       isGuest: account.isGuest,

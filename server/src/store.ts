@@ -11,13 +11,15 @@ import type {
   Role,
   RolePermissions,
 } from '@tsds/shared';
+import { BASE_ROLES } from '@tsds/shared';
 
 export interface StoredUser {
   id: string;
   username: string;
   displayName: string;
+  label?: string;
   passwordHash: string;
-  role: Extract<BaseRole, 'admin' | 'member'>;
+  role: BaseRole;
   roleIds: string[];
   banned: boolean;
   createdAt: number;
@@ -29,6 +31,8 @@ export interface StoredChannel {
   type: ChannelType;
   guest?: boolean;
   passwordHash?: string;
+  visibleRoles: BaseRole[];
+  visibleRoleIds: string[];
   createdAt: number;
 }
 
@@ -61,9 +65,9 @@ function emptyData(guestInviteCode: string, guestInviteRequired: boolean): Store
 function seedChannels(): StoredChannel[] {
   const now = Date.now();
   return [
-    { id: crypto.randomUUID(), name: 'Общий', type: 'voice', createdAt: now },
-    { id: crypto.randomUUID(), name: 'Вторая комната', type: 'voice', createdAt: now },
-    { id: crypto.randomUUID(), name: 'Общий чат', type: 'text', createdAt: now },
+    { id: crypto.randomUUID(), name: 'Общий', type: 'voice', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
+    { id: crypto.randomUUID(), name: 'Вторая комната', type: 'voice', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
+    { id: crypto.randomUUID(), name: 'Общий чат', type: 'text', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
   ];
 }
 
@@ -95,6 +99,14 @@ export class Store {
       this.data.channels = seedChannels();
     }
     this.ensureGuestChannel();
+    for (const channel of this.data.channels) {
+      if (!Array.isArray(channel.visibleRoles)) {
+        channel.visibleRoles = channel.guest
+          ? [...BASE_ROLES]
+          : ['member', 'moderator', 'admin'];
+      }
+      channel.visibleRoleIds ??= [];
+    }
     this.data.users ??= [];
     this.data.broadcastGroups ??= [];
     this.data.roles ??= [];
@@ -135,6 +147,8 @@ export class Store {
     const guest = this.data.channels.find((channel) => channel.guest);
     if (guest) {
       delete guest.passwordHash;
+      guest.visibleRoles = [...BASE_ROLES];
+      guest.visibleRoleIds = [];
       return;
     }
     const existing = this.data.channels.find(
@@ -143,6 +157,8 @@ export class Store {
     if (existing) {
       existing.guest = true;
       delete existing.passwordHash;
+      existing.visibleRoles = [...BASE_ROLES];
+      existing.visibleRoleIds = [];
       return;
     }
     this.data.channels.unshift({
@@ -150,6 +166,8 @@ export class Store {
       name: 'Гостевая',
       type: 'voice',
       guest: true,
+      visibleRoles: [...BASE_ROLES],
+      visibleRoleIds: [],
       createdAt: Date.now(),
     });
   }
@@ -209,7 +227,7 @@ export class Store {
       username: input.username,
       displayName: input.displayName,
       passwordHash: input.passwordHash,
-      role: this.data.users.length === 0 ? 'admin' : 'member',
+      role: this.data.users.length === 0 ? 'admin' : 'guest',
       roleIds: [],
       banned: false,
       createdAt: Date.now(),
@@ -248,7 +266,7 @@ export class Store {
     return user;
   }
 
-  setRole(id: string, role: 'admin' | 'member'): StoredUser | undefined {
+  setRole(id: string, role: BaseRole): StoredUser | undefined {
     const user = this.userById(id);
     if (!user) return undefined;
     user.role = role;
@@ -264,6 +282,16 @@ export class Store {
     return user;
   }
 
+  setLabel(id: string, label: string): StoredUser | undefined {
+    const user = this.userById(id);
+    if (!user) return undefined;
+    const trimmed = label.trim();
+    if (trimmed) user.label = trimmed;
+    else delete user.label;
+    this.saveNow();
+    return user;
+  }
+
   countAdmins(): number {
     return this.data.users.filter((u) => u.role === 'admin' && !u.banned).length;
   }
@@ -273,6 +301,7 @@ export class Store {
       id: u.id,
       username: u.username,
       displayName: u.displayName,
+      label: u.label,
       role: u.role,
       roleIds: [...u.roleIds],
       isGuest: false,
@@ -347,6 +376,10 @@ export class Store {
       user.roleIds = user.roleIds.filter((roleId) => roleId !== id);
       affected.push(user.id);
     }
+    for (const channel of this.data.channels) {
+      if (!channel.visibleRoleIds.includes(id)) continue;
+      channel.visibleRoleIds = channel.visibleRoleIds.filter((roleId) => roleId !== id);
+    }
     this.saveNow();
     return affected;
   }
@@ -360,6 +393,8 @@ export class Store {
       type: channel.type,
       guest: channel.guest,
       passwordProtected: Boolean(channel.passwordHash),
+      visibleRoles: [...channel.visibleRoles],
+      visibleRoleIds: [...channel.visibleRoleIds],
       createdAt: channel.createdAt,
     };
   }
@@ -379,11 +414,18 @@ export class Store {
     );
   }
 
-  createChannel(name: string, type: ChannelType, passwordHash?: string): StoredChannel {
+  createChannel(
+    name: string,
+    type: ChannelType,
+    passwordHash?: string,
+    visibility?: { visibleRoles?: BaseRole[]; visibleRoleIds?: string[] },
+  ): StoredChannel {
     const channel: StoredChannel = {
       id: crypto.randomUUID(),
       name: name.trim(),
       type,
+      visibleRoles: [...(visibility?.visibleRoles ?? BASE_ROLES)],
+      visibleRoleIds: [...(visibility?.visibleRoleIds ?? [])],
       createdAt: Date.now(),
     };
     if (passwordHash) channel.passwordHash = passwordHash;
@@ -394,13 +436,20 @@ export class Store {
 
   updateChannel(
     id: string,
-    patch: { name?: string; passwordHash?: string | null },
+    patch: {
+      name?: string;
+      passwordHash?: string | null;
+      visibleRoles?: BaseRole[];
+      visibleRoleIds?: string[];
+    },
   ): StoredChannel | undefined {
     const channel = this.channelById(id);
     if (!channel) return undefined;
     if (patch.name !== undefined) channel.name = patch.name.trim();
     if (patch.passwordHash === null) delete channel.passwordHash;
     else if (patch.passwordHash !== undefined) channel.passwordHash = patch.passwordHash;
+    if (patch.visibleRoles !== undefined) channel.visibleRoles = [...patch.visibleRoles];
+    if (patch.visibleRoleIds !== undefined) channel.visibleRoleIds = [...patch.visibleRoleIds];
     this.saveNow();
     return channel;
   }

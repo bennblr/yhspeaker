@@ -362,6 +362,19 @@ npm run dist:desktop
 
 Готовый установщик: `desktop/release/YHSpeak-Setup-1.0.0.exe` (NSIS, x64).
 
+Установщик можно раздавать прямо из голосового канала. Положите `.exe` в каталог
+`desktop-installer/` рядом с `docker-compose.yml` (или задайте свой каталог в
+`DESKTOP_INSTALLER_DIR`). Сервер отдаёт самый свежий файл по адресу `/download/windows`,
+а в веб-клиенте у пользователей десктопного браузера появляется кнопка «Скачать .exe».
+В приложении Electron и на мобильных устройствах она скрыта. Локально сервер берёт файл
+из `desktop/release/`.
+
+```bash
+scp desktop/release/YHSpeak-Setup-1.0.0.exe root@<сервер>:/opt/yhspeak/desktop-installer/
+cd /opt/yhspeak
+docker compose up -d platform
+```
+
 Особенности:
 
 - Установщик не подписан сертификатом, поэтому SmartScreen может показать предупреждение:

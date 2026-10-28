@@ -1,13 +1,21 @@
 export const APP_VERSION = '1.0.0';
 export const MAX_MESSAGE_LENGTH = 2000;
 export const MAX_DISPLAY_NAME = 32;
+export const MAX_LABEL_LENGTH = 20;
 export const MAX_CHANNEL_NAME = 32;
 export const MAX_GROUP_NAME = 40;
 export const MAX_ROLE_NAME = 40;
 export const MIN_VOICE_PARTICIPANTS = 1;
 export const MAX_VOICE_PARTICIPANTS = 150;
 
-export type BaseRole = 'admin' | 'member' | 'guest';
+export type BaseRole = 'admin' | 'moderator' | 'member' | 'guest';
+export const BASE_ROLES: BaseRole[] = ['guest', 'member', 'moderator', 'admin'];
+export const BASE_ROLE_LABELS: Record<BaseRole, string> = {
+  guest: 'Гость',
+  member: 'Пользователь',
+  moderator: 'Модератор',
+  admin: 'Админ',
+};
 export type ChannelType = 'voice' | 'text';
 export type ProducerSource = 'mic' | 'screen';
 export type MediaKind = 'audio' | 'video';
@@ -53,7 +61,8 @@ export function hasPermission(
 ): boolean {
   if (!user) return false;
   if (user.role === 'admin') return true;
-  if (user.role !== 'member') return false;
+  if (user.role === 'guest') return false;
+  if (user.role === 'moderator' && permission === 'moderate') return true;
   return (user.roleIds ?? []).some((id) => {
     const role = roles.find((item) => item.id === id);
     return role?.permissions[permission] === true;
@@ -75,13 +84,28 @@ export interface Channel {
   type: ChannelType;
   guest?: boolean;
   passwordProtected?: boolean;
+  visibleRoles: BaseRole[];
+  visibleRoleIds: string[];
   createdAt: number;
+}
+
+export function isChannelVisible(
+  user: { role: BaseRole; roleIds?: string[] } | null | undefined,
+  channel: Pick<Channel, 'guest' | 'visibleRoles' | 'visibleRoleIds'>,
+): boolean {
+  if (!user) return false;
+  // Видимость каналов ограничивает только гостей: пользователь и выше
+  // получают доступ ко всем каналам сервера.
+  if (user.role !== 'guest') return true;
+  if (channel.guest) return true;
+  return channel.visibleRoles.includes('guest');
 }
 
 export interface OnlineUser {
   id: string;
   username: string;
   displayName: string;
+  label?: string;
   role: BaseRole;
   roleIds: string[];
   isGuest: boolean;
@@ -106,6 +130,7 @@ export interface AdminUser {
   id: string;
   username: string;
   displayName: string;
+  label?: string;
   role: BaseRole;
   roleIds: string[];
   isGuest: boolean;
@@ -118,6 +143,7 @@ export interface ChatMessage {
   channelId: string;
   userId: string;
   displayName: string;
+  label?: string;
   role: BaseRole;
   text: string;
   ts: number;
@@ -168,6 +194,163 @@ export interface SpeakerInfo {
   volume: number;
 }
 
+export const STATS_SAMPLE_MS = 30_000;
+export const STATS_BUCKET_MS = 5 * 60_000;
+
+export interface OnlineStatsBucket {
+  t: number;
+  sum: number;
+  samples: number;
+  peak: number;
+}
+
+export interface OnlineStatsUserDay {
+  userId: string;
+  displayName: string;
+  guest: boolean;
+  seconds: number;
+  sessions: number;
+  lastSeen: number;
+}
+
+export interface OnlineStatsDay {
+  date: string;
+  buckets: OnlineStatsBucket[];
+  users: Record<string, OnlineStatsUserDay>;
+}
+
+export interface OnlineStatsFile {
+  version: 1;
+  days: Record<string, OnlineStatsDay>;
+}
+
+export function statsDateKey(ts: number): string {
+  const date = new Date(ts);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+export interface OnlineStatsPoint {
+  t: number;
+  avg: number;
+  peak: number;
+}
+
+export interface OnlineStatsUser {
+  userId: string;
+  displayName: string;
+  guest: boolean;
+  seconds: number;
+  sessions: number;
+  lastSeen: number;
+}
+
+export interface OnlineStatsDaySummary {
+  date: string;
+  peak: number;
+  average: number;
+  seconds: number;
+  users: number;
+}
+
+export interface OnlineStatsSummary {
+  from: number;
+  to: number;
+  bucketMs: number;
+  peak: number;
+  average: number;
+  uniqueUsers: number;
+  totalSeconds: number;
+  sessions: number;
+  timeline: OnlineStatsPoint[];
+  daily: OnlineStatsDaySummary[];
+  users: OnlineStatsUser[];
+}
+
+export function summarizeOnlineStats(
+  days: OnlineStatsDay[],
+  from: number,
+  to: number,
+): OnlineStatsSummary {
+  const bucketMs = to - from > 14 * 24 * 3_600_000 ? 6 * 3_600_000 : 3_600_000;
+  let peak = 0;
+  let sum = 0;
+  let samples = 0;
+  let totalSeconds = 0;
+  let sessions = 0;
+  const timeline = new Map<number, { sum: number; samples: number; peak: number }>();
+  const users = new Map<string, OnlineStatsUser>();
+  const daily: OnlineStatsDaySummary[] = [];
+
+  for (const day of days) {
+    let dayPeak = 0;
+    let daySum = 0;
+    let daySamples = 0;
+    let daySeconds = 0;
+    for (const bucket of day.buckets) {
+      if (bucket.t + STATS_BUCKET_MS <= from || bucket.t >= to) continue;
+      dayPeak = Math.max(dayPeak, bucket.peak);
+      daySum += bucket.sum;
+      daySamples += bucket.samples;
+      const key = Math.floor(bucket.t / bucketMs) * bucketMs;
+      const point = timeline.get(key) ?? { sum: 0, samples: 0, peak: 0 };
+      point.sum += bucket.sum;
+      point.samples += bucket.samples;
+      point.peak = Math.max(point.peak, bucket.peak);
+      timeline.set(key, point);
+    }
+    for (const user of Object.values(day.users)) {
+      if (user.lastSeen < from) continue;
+      daySeconds += user.seconds;
+      totalSeconds += user.seconds;
+      sessions += user.sessions;
+      const merged = users.get(user.userId);
+      if (merged) {
+        merged.seconds += user.seconds;
+        merged.sessions += user.sessions;
+        if (user.lastSeen >= merged.lastSeen) {
+          merged.lastSeen = user.lastSeen;
+          merged.displayName = user.displayName;
+          merged.guest = user.guest;
+        }
+      } else {
+        users.set(user.userId, { ...user });
+      }
+    }
+    peak = Math.max(peak, dayPeak);
+    sum += daySum;
+    samples += daySamples;
+    daily.push({
+      date: day.date,
+      peak: dayPeak,
+      average: daySamples ? daySum / daySamples : 0,
+      seconds: daySeconds,
+      users: Object.keys(day.users).length,
+    });
+  }
+
+  return {
+    from,
+    to,
+    bucketMs,
+    peak,
+    average: samples ? sum / samples : 0,
+    uniqueUsers: users.size,
+    totalSeconds,
+    sessions,
+    timeline: [...timeline.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([t, point]) => ({
+        t,
+        avg: point.samples ? point.sum / point.samples : 0,
+        peak: point.peak,
+      })),
+    daily: daily.sort((a, b) => a.date.localeCompare(b.date)),
+    users: [...users.values()].sort((a, b) => b.seconds - a.seconds),
+  };
+}
+
 export type AckResult = { ok: boolean; error?: string };
 
 export interface AuthorizeGuestResult extends AckResult {
@@ -189,6 +372,7 @@ export interface ServerToClientEvents {
   'voice:consumerClosed': (payload: { consumerId: string }) => void;
   'voice:activeSpeakers': (speakers: SpeakerInfo[]) => void;
   'voice:kicked': (payload: { channelName: string; byName: string }) => void;
+  'voice:moved': (payload: { channelId: string; channelName: string; byName: string }) => void;
   'voice:joinFailed': (payload: { message: string }) => void;
   'voice:serverMuted': (payload: { userId: string; muted: boolean }) => void;
   toast: (payload: { type: 'ok' | 'error' | 'info'; text: string }) => void;
@@ -237,7 +421,15 @@ export interface ClientToServerEvents {
     ack?: (res: AckResult) => void,
   ) => void;
   'mod:setRole': (
-    payload: { userId: string; role: 'admin' | 'member' },
+    payload: { userId: string; role: BaseRole },
+    ack?: (res: AckResult) => void,
+  ) => void;
+  'mod:setLabel': (
+    payload: { userId: string; label: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
+  'mod:moveUser': (
+    payload: { userId: string; channelId: string },
     ack?: (res: AckResult) => void,
   ) => void;
   'mod:setUserRoles': (
@@ -249,11 +441,23 @@ export interface ClientToServerEvents {
     ack?: (res: AuthorizeGuestResult) => void,
   ) => void;
   'admin:createChannel': (
-    payload: { name: string; type: ChannelType; password?: string },
+    payload: {
+      name: string;
+      type: ChannelType;
+      password?: string;
+      visibleRoles?: BaseRole[];
+      visibleRoleIds?: string[];
+    },
     ack?: (res: AckResult) => void,
   ) => void;
   'admin:updateChannel': (
-    payload: { channelId: string; name: string; password?: string },
+    payload: {
+      channelId: string;
+      name: string;
+      password?: string;
+      visibleRoles?: BaseRole[];
+      visibleRoleIds?: string[];
+    },
     ack?: (res: AckResult) => void,
   ) => void;
   'admin:deleteChannel': (payload: { channelId: string }, ack?: (res: AckResult) => void) => void;

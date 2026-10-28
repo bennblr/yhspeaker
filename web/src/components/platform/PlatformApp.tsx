@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  BarChart3,
   Check,
   CircleAlert,
   Copy,
@@ -20,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import type { OnlineStatsSummary } from '@tsds/shared';
 import { Modal } from '../Modal';
 import {
   PlatformApiError,
@@ -96,6 +98,15 @@ function formatDate(ts: number): string {
     month: 'short',
     year: 'numeric',
   });
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  if (minutes > 0) return `${minutes} мин`;
+  return `${total} с`;
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -232,6 +243,11 @@ export function PlatformApp() {
 
   const [deleting, setDeleting] = useState<PlatformServer | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState('');
+
+  const [statsFor, setStatsFor] = useState<PlatformServer | null>(null);
+  const [statsDays, setStatsDays] = useState(7);
+  const [statsData, setStatsData] = useState<OnlineStatsSummary | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const servers = overview?.servers ?? [];
   const meta: PlatformMeta | null = overview?.meta ?? null;
@@ -422,6 +438,26 @@ export function PlatformApp() {
       setCredentialsLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!statsFor || !token) return;
+    let cancelled = false;
+    setStatsLoading(true);
+    platformApi
+      .stats(token, statsFor.id, statsDays)
+      .then((result) => {
+        if (!cancelled) setStatsData(result.stats);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setNotice({ kind: 'error', text: errorText(error) });
+      })
+      .finally(() => {
+        if (!cancelled) setStatsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [statsFor, statsDays, token]);
 
   async function submitDelete(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -723,6 +759,18 @@ export function PlatformApp() {
                     <button
                       type="button"
                       className="icon-btn ml-auto h-8 w-8"
+                      title="Статистика онлайна"
+                      aria-label="Статистика онлайна"
+                      onClick={() => {
+                        setStatsData(null);
+                        setStatsFor(server);
+                      }}
+                    >
+                      <BarChart3 className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn h-8 w-8"
                       title="Логин и пароль администратора сервера"
                       aria-label="Доступ администратора"
                       onClick={() => void openCredentials(server)}
@@ -1081,6 +1129,181 @@ export function PlatformApp() {
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(statsFor)}
+        onClose={() => setStatsFor(null)}
+        title={statsFor ? `Статистика «${statsFor.name}»` : 'Статистика'}
+        subtitle="Пиковый, средний и суммарный онлайн за выбранный период"
+        width="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 7, 30, 90].map((days) => (
+              <button
+                key={days}
+                className={cn(
+                  'btn-ghost h-8 px-3 text-xs',
+                  statsDays === days && 'border-accent/40 bg-accent/10 text-accent',
+                )}
+                onClick={() => setStatsDays(days)}
+                disabled={statsLoading}
+              >
+                {days === 1 ? 'Сутки' : `${days} дней`}
+              </button>
+            ))}
+            <button
+              className="icon-btn ml-auto h-8 w-8"
+              title="Обновить"
+              onClick={() => {
+                const current = statsFor;
+                if (!current || !token) return;
+                setStatsLoading(true);
+                platformApi
+                  .stats(token, current.id, statsDays)
+                  .then((result) => setStatsData(result.stats))
+                  .catch((error: unknown) =>
+                    setNotice({ kind: 'error', text: errorText(error) }),
+                  )
+                  .finally(() => setStatsLoading(false));
+              }}
+              disabled={statsLoading}
+            >
+              <RefreshCw className={cn('h-4 w-4', statsLoading && 'animate-spin')} />
+            </button>
+          </div>
+
+          {!statsData ? (
+            <div className="flex justify-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-muted" />
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <Stat label="Пиковый онлайн" value={String(statsData.peak)} />
+                <Stat label="Средний онлайн" value={statsData.average.toFixed(1)} />
+                <Stat label="Участников" value={String(statsData.uniqueUsers)} />
+                <Stat label="Суммарный онлайн" value={formatDuration(statsData.totalSeconds)} />
+              </div>
+
+              <div className="rounded-xl border border-line bg-panel/40 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+                    <BarChart3 className="h-3.5 w-3.5 text-accent" />
+                    Средний онлайн по времени
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted">
+                    интервал {Math.round(statsData.bucketMs / 3_600_000)} ч
+                  </span>
+                </div>
+                {statsData.timeline.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-muted">
+                    Данных пока нет — статистика собирается каждые 30 секунд.
+                  </p>
+                ) : (
+                  <div className="flex h-32 items-end gap-[2px] overflow-x-auto">
+                    {statsData.timeline.map((point) => (
+                      <div
+                        key={point.t}
+                        className="min-w-[5px] flex-1 rounded-t bg-accent/70 transition hover:bg-accent"
+                        style={{
+                          height: `${Math.max(2, (point.avg / Math.max(1, statsData.peak)) * 100)}%`,
+                        }}
+                        title={`${new Date(point.t).toLocaleString('ru-RU', {
+                          day: '2-digit',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })} · средний ${point.avg.toFixed(1)}, пик ${point.peak}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-line">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-panel3/60 text-[10px] uppercase tracking-wider text-muted">
+                    <tr>
+                      <th className="px-3 py-2">День</th>
+                      <th className="px-3 py-2">Пик</th>
+                      <th className="px-3 py-2">Средний</th>
+                      <th className="px-3 py-2">Участников</th>
+                      <th className="px-3 py-2">Онлайн</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statsData.daily.map((day) => (
+                      <tr key={day.date} className="border-t border-line/60">
+                        <td className="px-3 py-1.5 text-slate-300">{day.date}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.peak}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.average.toFixed(1)}</td>
+                        <td className="px-3 py-1.5 text-slate-200">{day.users}</td>
+                        <td className="px-3 py-1.5 text-slate-200">
+                          {formatDuration(day.seconds)}
+                        </td>
+                      </tr>
+                    ))}
+                    {statsData.daily.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-4 text-center text-muted">
+                          Нет данных за период
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-line">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-panel3/60 text-[10px] uppercase tracking-wider text-muted">
+                    <tr>
+                      <th className="px-3 py-2">Участник</th>
+                      <th className="px-3 py-2">Время в сети</th>
+                      <th className="px-3 py-2">Сессий</th>
+                      <th className="px-3 py-2">Был(а)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statsData.users.map((user) => (
+                      <tr key={user.userId} className="border-t border-line/60">
+                        <td className="px-3 py-1.5 text-slate-300">
+                          {user.displayName}
+                          {user.guest && (
+                            <span className="ml-1.5 rounded bg-amber-400/10 px-1 py-0.5 text-[9px] uppercase text-amber-300">
+                              гость
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-200">
+                          {formatDuration(user.seconds)}
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-200">{user.sessions}</td>
+                        <td className="px-3 py-1.5 text-muted">
+                          {new Date(user.lastSeen).toLocaleString('ru-RU', {
+                            day: '2-digit',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                    {statsData.users.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-4 text-center text-muted">
+                          Нет данных об участниках
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
       </Modal>
 
       <Modal

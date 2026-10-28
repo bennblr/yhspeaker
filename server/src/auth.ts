@@ -9,6 +9,7 @@ export interface Account {
   id: string;
   username: string;
   displayName: string;
+  label?: string;
   role: BaseRole;
   roleIds: string[];
   isGuest: boolean;
@@ -54,6 +55,7 @@ function accountFromStored(user: StoredUser): Account {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
+    label: user.label,
     role: user.role,
     roleIds: [...user.roleIds],
     isGuest: false,

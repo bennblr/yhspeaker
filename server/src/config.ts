@@ -56,6 +56,7 @@ export interface AppConfig {
   serverName: string;
   dataDir: string;
   webDistDir: string;
+  desktopInstallerDir: string;
   jwtSecret: string;
   allowGuests: boolean;
   guestInviteCode: string;
@@ -78,6 +79,10 @@ export const config: AppConfig = {
   serverName: normalizeServerName(envString('SERVER_NAME', 'YHSpeak')),
   dataDir: path.resolve(rootDir, envString('DATA_DIR', 'data')),
   webDistDir: path.join(rootDir, 'web', 'dist'),
+  desktopInstallerDir: path.resolve(
+    rootDir,
+    envString('DESKTOP_INSTALLER_DIR', 'desktop/release'),
+  ),
   jwtSecret: resolveJwtSecret(),
   allowGuests: envBool('ALLOW_GUESTS', true),
   guestInviteCode: envString('GUEST_INVITE_CODE', ''),

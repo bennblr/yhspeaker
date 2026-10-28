@@ -9,13 +9,17 @@ import {
   MoreVertical,
   Radio,
   Shield,
+  ShieldCheck,
   ShieldOff,
+  Tag,
   UserX,
   Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { hasPermission, type BroadcastGroup, type Channel, type OnlineUser } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
 import { primaryRole, roleLabel } from '../lib/roles';
@@ -45,8 +49,12 @@ function ModeratorMenu({
   onClose: () => void;
 }) {
   const me = useApp((state) => state.me);
+  const channels = useApp((state) => state.channels);
   const socket = getSocket();
   if (!socket || !me) return null;
+  const voiceChannels = channels.filter(
+    (channel) => channel.type === 'voice' && channel.id !== user.channelId,
+  );
 
   function run(
     emit: (callback: (result: { ok: boolean; error?: string }) => void) => void,
@@ -71,8 +79,25 @@ function ModeratorMenu({
           <span className="truncate text-xs font-semibold text-slate-200">
             {user.displayName}
           </span>
+          <LabelBadge label={user.label} />
         </div>
         <div className="my-1 h-px bg-line" />
+        <button
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
+          onClick={() => {
+            const next = window.prompt(
+              'Метка рядом с ником (до 20 символов, пусто — убрать):',
+              user.label ?? '',
+            );
+            if (next === null) return;
+            run((callback) =>
+              socket.emit('mod:setLabel', { userId: user.id, label: next }, callback),
+            );
+          }}
+        >
+          <Tag className="h-3.5 w-3.5 text-accent" />
+          {user.label ? 'Изменить метку' : 'Подписать участника'}
+        </button>
         <button
           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
           onClick={() =>
@@ -88,6 +113,31 @@ function ModeratorMenu({
           <MicOff className="h-3.5 w-3.5 text-warn" />
           {user.serverMuted ? 'Вернуть микрофон' : 'Отключить микрофон'}
         </button>
+        {user.channelId && voiceChannels.length > 0 && (
+          <div className="px-2.5 py-1.5">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
+              Переместить в канал
+            </div>
+            <select
+              className="input h-8 py-0 text-xs"
+              value=""
+              onChange={(event) => {
+                const channelId = event.target.value;
+                if (!channelId) return;
+                run((callback) =>
+                  socket.emit('mod:moveUser', { userId: user.id, channelId }, callback),
+                );
+              }}
+            >
+              <option value="">Выберите канал…</option>
+              {voiceChannels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {user.channelId && (
           <button
             className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
@@ -158,7 +208,9 @@ function ParticipantTile({
   const [menuOpen, setMenuOpen] = useState(false);
   const groups = useApp((state) => state.broadcastGroups);
   const roles = useApp((state) => state.roles);
-  const primary = user.role === 'admin' ? null : primaryRole(user, roles);
+  const localMuted = useApp((state) => state.localMuted.includes(user.id));
+  const toggleLocalMute = useApp((state) => state.toggleLocalMute);
+  const primary = user.role === 'member' ? primaryRole(user, roles) : null;
   const showModMenu = canModerate && !isSelf;
 
   return (
@@ -196,14 +248,23 @@ function ParticipantTile({
       <div className="w-full text-center">
         <div className="flex items-center justify-center gap-1.5">
           <span
-            className="max-w-full truncate text-sm font-semibold text-slate-100"
+            className={cn(
+              'max-w-full truncate text-sm font-semibold text-slate-100',
+              localMuted && 'opacity-50',
+            )}
             style={primary ? { color: primary.color } : undefined}
           >
             {user.displayName}
           </span>
+          <LabelBadge label={user.label} />
           {user.role === 'admin' && (
             <span title="Администратор" className="shrink-0">
               <Shield className="h-3.5 w-3.5 text-accent" />
+            </span>
+          )}
+          {user.role === 'moderator' && (
+            <span title="Модератор" className="shrink-0">
+              <ShieldCheck className="h-3.5 w-3.5 text-ok" />
             </span>
           )}
           {isSelf && (
@@ -245,6 +306,19 @@ function ParticipantTile({
           </span>
         )}
         {speaking && <span className="text-[10px] font-medium text-ok">говорит</span>}
+        {!isSelf && (
+          <button
+            type="button"
+            className={cn(
+              'ml-1 rounded p-0.5 transition hover:bg-white/[0.06]',
+              localMuted && 'text-danger',
+            )}
+            title={localMuted ? 'Включить звук участника у себя' : 'Заглушить участника у себя'}
+            onClick={() => toggleLocalMute(user.id)}
+          >
+            {localMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -10,8 +10,10 @@ services:
       PLATFORM_BIND: "127.0.0.1"
       PLATFORM_PORT: "4100"
       PLATFORM_DATA_DIR: "/app/platform-data"
+      DESKTOP_INSTALLER_DIR: "/app/desktop-installer"
     volumes:
       - platform-data:/app/platform-data
+      - ./desktop-installer:/app/desktop-installer:ro
     healthcheck:
       test:
         [

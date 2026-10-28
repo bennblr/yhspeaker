@@ -27,25 +27,149 @@ export const PTT_OPTIONS = [
   { value: 'Control+Space', label: 'Ctrl + Space', hint: 'глобально в приложении' },
 ];
 
-export const HOTKEY_OPTIONS = [
-  { value: '', label: 'Не назначено' },
-  ...Array.from({ length: 9 }, (_, index) => ({
-    value: `Alt+${index + 1}`,
-    label: `Alt + ${index + 1}`,
-  })),
-  ...Array.from({ length: 9 }, (_, index) => ({
-    value: `Control+Alt+${index + 1}`,
-    label: `Ctrl + Alt + ${index + 1}`,
-  })),
-  ...Array.from({ length: 7 }, (_, index) => ({
-    value: `F${index + 6}`,
-    label: `F${index + 6}`,
-  })),
-];
+const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'] as const;
+const MODIFIER_CODES = new Set([
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'MetaLeft',
+  'MetaRight',
+]);
 
-const HOTKEY_VALUES = new Set(
-  HOTKEY_OPTIONS.map((option) => option.value).filter((value) => value !== ''),
-);
+// Совпадает с именами клавиш uiohook-napi (UiohookKey), чтобы назначение
+// из браузера работало и в глобальном хуке Windows.
+const GLOBAL_SINGLE_KEYS = new Set([
+  'PageUp',
+  'PageDown',
+  'Home',
+  'End',
+  'Insert',
+  'Delete',
+  'PrintScreen',
+  'NumLock',
+  'ScrollLock',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+]);
+
+const NAMED_KEYS = new Set([
+  ...GLOBAL_SINGLE_KEYS,
+  'Backspace',
+  'Tab',
+  'Enter',
+  'CapsLock',
+  'Escape',
+  'Space',
+  'Semicolon',
+  'Equal',
+  'Comma',
+  'Minus',
+  'Period',
+  'Slash',
+  'Backquote',
+  'BracketLeft',
+  'Backslash',
+  'BracketRight',
+  'Quote',
+  ...Array.from({ length: 10 }, (_, index) => `Numpad${index}`),
+  'NumpadMultiply',
+  'NumpadAdd',
+  'NumpadSubtract',
+  'NumpadDecimal',
+  'NumpadDivide',
+]);
+
+const KEY_LABELS: Record<string, string> = {
+  Space: 'Пробел',
+  Escape: 'Esc',
+  Backspace: 'Backspace',
+  Enter: 'Enter',
+  Tab: 'Tab',
+  Equal: '=',
+  Minus: '-',
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Backquote: '`',
+  BracketLeft: '[',
+  BracketRight: ']',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+};
+
+const MODIFIER_LABELS: Record<string, string> = {
+  Control: 'Ctrl',
+  Alt: 'Alt',
+  Shift: 'Shift',
+  Meta: 'Win',
+};
+
+function isKeyToken(token: string): boolean {
+  if (/^[A-Z]$/.test(token)) return true;
+  if (/^[0-9]$/.test(token)) return true;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(token)) return true;
+  return NAMED_KEYS.has(token);
+}
+
+export function isValidAccelerator(accelerator: string): boolean {
+  if (!accelerator) return false;
+  const parts = accelerator.split('+');
+  const key = parts.pop() ?? '';
+  if (!isKeyToken(key)) return false;
+  const seen = new Set<string>();
+  for (const part of parts) {
+    if (!(MODIFIERS as readonly string[]).includes(part) || seen.has(part)) return false;
+    seen.add(part);
+  }
+  return true;
+}
+
+function tokenMatchesCode(token: string, code: string): boolean {
+  if (/^[A-Z]$/.test(token)) return code === `Key${token}`;
+  if (/^[0-9]$/.test(token)) return code === `Digit${token}`;
+  return code === token;
+}
+
+function keyTokenFromEvent(event: KeyboardEvent): string | null {
+  if (MODIFIER_CODES.has(event.code)) return null;
+  const letter = /^Key([A-Z])$/.exec(event.code);
+  if (letter) return letter[1];
+  const digit = /^Digit([0-9])$/.exec(event.code);
+  if (digit) return digit[1];
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.code)) return event.code;
+  if (NAMED_KEYS.has(event.code)) return event.code;
+  return null;
+}
+
+export function acceleratorFromEvent(event: KeyboardEvent): string | null {
+  const token = keyTokenFromEvent(event);
+  if (!token) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('Control');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+  if (event.metaKey) parts.push('Meta');
+  parts.push(token);
+  return parts.join('+');
+}
+
+export function formatAccelerator(accelerator: string): string {
+  if (!accelerator) return 'Не назначено';
+  return accelerator
+    .split('+')
+    .map((part) => MODIFIER_LABELS[part] ?? KEY_LABELS[part] ?? part)
+    .join(' + ');
+}
 
 export const DEFAULT_SETTINGS: MicSettings = {
   inputDeviceId: 'default',
@@ -71,13 +195,13 @@ function clamp(value: number, min: number, max: number): number {
 function normalizeBroadcastKeys(value: unknown): BroadcastKeys {
   const source = (value ?? {}) as Partial<BroadcastKeys>;
   const all =
-    typeof source.all === 'string' && (source.all === '' || HOTKEY_VALUES.has(source.all))
+    typeof source.all === 'string' && (source.all === '' || isValidAccelerator(source.all))
       ? source.all
       : DEFAULT_SETTINGS.broadcastKeys.all;
   const groups: Record<string, string> = {};
   if (source.groups && typeof source.groups === 'object') {
     for (const [id, accelerator] of Object.entries(source.groups)) {
-      if (typeof accelerator === 'string' && HOTKEY_VALUES.has(accelerator)) {
+      if (typeof accelerator === 'string' && isValidAccelerator(accelerator)) {
         groups[id] = accelerator;
       }
     }
@@ -117,8 +241,14 @@ export function saveSettings(settings: MicSettings): void {
   }
 }
 
+// Клавиши, которые в приложении для Windows можно повесить на глобальный хук:
+// сочетания и служебные одиночные клавиши. Буквы и цифры без модификатора
+// обрабатываются только при активном окне, чтобы не срабатывать при вводе текста.
 export function isGlobalAccelerator(accelerator: string): boolean {
-  return accelerator.includes('+');
+  if (!accelerator) return false;
+  if (accelerator.includes('+')) return true;
+  const token = accelerator.split('+').pop() ?? '';
+  return /^F([1-9]|1[0-9]|2[0-4])$/.test(token) || GLOBAL_SINGLE_KEYS.has(token);
 }
 
 // Больше значение — выше чувствительность: микрофон реагирует на более тихий голос.
@@ -132,6 +262,7 @@ export function micLevelPercent(level: number): number {
 }
 
 export function matchesPttKey(event: KeyboardEvent, accelerator: string): boolean {
+  if (!isValidAccelerator(accelerator)) return false;
   const parts = accelerator.split('+');
   const key = parts.pop() ?? '';
   const needAlt = parts.includes('Alt');
@@ -144,16 +275,13 @@ export function matchesPttKey(event: KeyboardEvent, accelerator: string): boolea
   if (event.shiftKey !== needShift) return false;
   if (event.metaKey !== needMeta) return false;
 
-  if (key === 'Space') return event.code === 'Space';
-  if (/^[A-Z]$/.test(key)) return event.code === `Key${key}`;
-  return event.key === key;
+  return tokenMatchesCode(key, event.code);
 }
 
 export function matchesPttRelease(event: KeyboardEvent, accelerator: string): boolean {
+  if (!isValidAccelerator(accelerator)) return false;
   const key = accelerator.split('+').pop() ?? '';
-  if (key === 'Space') return event.code === 'Space';
-  if (/^[A-Z]$/.test(key)) return event.code === `Key${key}`;
-  return event.key === key;
+  return tokenMatchesCode(key, event.code);
 }
 
 export function describePttKey(accelerator: string): string {

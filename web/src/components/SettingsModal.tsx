@@ -10,9 +10,11 @@ import {
   Radio,
   RefreshCw,
   Shield,
+  ShieldCheck,
   UserRound,
   Users,
   Volume2,
+  X,
 } from 'lucide-react';
 import { MAX_DISPLAY_NAME } from '@tsds/shared';
 import { Modal } from './Modal';
@@ -21,8 +23,9 @@ import { useApp } from '../lib/store';
 import { updateSettings, toast } from '../lib/actions';
 import { api } from '../lib/api';
 import {
-  HOTKEY_OPTIONS,
   PTT_OPTIONS,
+  acceleratorFromEvent,
+  formatAccelerator,
   isGlobalAccelerator,
   micLevelPercent,
   sensitivityThreshold,
@@ -91,37 +94,121 @@ function DeviceSelect({
   );
 }
 
-function HotkeySelect({
+function HotkeyRecorder({
   value,
   onChange,
-  isUsed,
   warning,
 }: {
   value: string;
   onChange: (value: string) => void;
-  isUsed: (value: string) => boolean;
   warning: string | null;
 }) {
+  const [recording, setRecording] = useState(false);
+  const [recordingHint, setRecordingHint] = useState<string | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
+  useEffect(() => {
+    if (!recording) return;
+    const down = (event: KeyboardEvent) => {
+      const bare =
+        !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+      if (event.key === 'Escape' && bare) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRecording(false);
+        setRecordingHint(null);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      if (
+        event.key === 'Control' ||
+        event.key === 'Alt' ||
+        event.key === 'Shift' ||
+        event.key === 'Meta'
+      ) {
+        setRecordingHint('Теперь нажмите клавишу — получится сочетание.');
+        return;
+      }
+      const accelerator = acceleratorFromEvent(event);
+      if (!accelerator) {
+        setRecordingHint('Эта клавиша не поддерживается. Попробуйте другую.');
+        return;
+      }
+      onChangeRef.current(accelerator);
+      setRecording(false);
+      setRecordingHint(null);
+    };
+    const up = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const cancel = () => {
+      setRecording(false);
+      setRecordingHint(null);
+    };
+    const outside = (event: PointerEvent) => {
+      if (!buttonRef.current?.contains(event.target as Node)) cancel();
+    };
+    window.addEventListener('keydown', down, true);
+    window.addEventListener('keyup', up, true);
+    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('blur', cancel);
+    return () => {
+      window.removeEventListener('keydown', down, true);
+      window.removeEventListener('keyup', up, true);
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('blur', cancel);
+    };
+  }, [recording]);
+
   return (
     <div>
-      <div className="relative">
-        <select
-          className="input appearance-none pr-9"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
+      <div className="flex items-center gap-2">
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => {
+            setRecording((current) => !current);
+            setRecordingHint(null);
+          }}
+          className={cn(
+            'input flex min-h-[42px] flex-1 items-center justify-between gap-3 text-left',
+            recording && 'border-accent/60 text-accent',
+          )}
         >
-          {HOTKEY_OPTIONS.map((option) => {
-            const taken = option.value !== '' && option.value !== value && isUsed(option.value);
-            return (
-              <option key={option.value || 'none'} value={option.value} disabled={taken}>
-                {option.label}
-                {taken ? ' — занято' : ''}
-              </option>
-            );
-          })}
-        </select>
-        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+          <span className={cn('truncate', !recording && !value && 'text-muted')}>
+            {recording ? 'Нажмите клавишу или сочетание…' : formatAccelerator(value)}
+          </span>
+          <Keyboard
+            className={cn('h-4 w-4 shrink-0', recording ? 'text-accent' : 'text-muted')}
+          />
+        </button>
+        {value && (
+          <button
+            type="button"
+            className="btn-ghost h-[42px] px-2.5"
+            title="Очистить"
+            onClick={() => {
+              setRecording(false);
+              setRecordingHint(null);
+              onChange('');
+            }}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
+      {recording && (
+        <p className="mt-1 text-[11px] text-accent">Нажмите нужную клавишу. Esc — отмена.</p>
+      )}
+      {recordingHint && <p className="mt-1 text-[11px] text-warn">{recordingHint}</p>}
       {warning && <p className="mt-1 text-[11px] text-warn">{warning}</p>}
     </div>
   );
@@ -402,12 +489,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     updateSettings({ broadcastKeys: { ...settings.broadcastKeys, groups } });
   }
 
-  const hotkeyTakenBy = (targetId: string, accelerator: string): boolean => {
-    if (!accelerator) return false;
-    if (accelerator === settings.pttKey) return true;
-    return broadcastTargets.some((target) => target.id !== targetId && target.value === accelerator);
-  };
-
   const hotkeyWarning = (targetId: string, value: string): string | null => {
     if (!value) return null;
     if (value === settings.pttKey) {
@@ -415,6 +496,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     }
     if (broadcastTargets.some((target) => target.id !== targetId && target.value === value)) {
       return 'Клавиша уже назначена другой цели — сработает только первое назначение.';
+    }
+    if (desktop && !isGlobalAccelerator(value)) {
+      return 'Одиночная клавиша сработает только при активном окне приложения — так она не мешает вводу текста.';
     }
     return null;
   };
@@ -448,9 +532,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     {me.role === 'admin' && (
                       <Shield className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="Администратор" />
                     )}
+                    {me.role === 'moderator' && (
+                      <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-ok" aria-label="Модератор" />
+                    )}
                   </div>
                   <div className="text-[10px] uppercase tracking-wider text-muted">
-                    {me.role === 'admin' ? 'администратор' : 'участник'}
+                    {me.role === 'admin'
+                      ? 'администратор'
+                      : me.role === 'moderator'
+                        ? 'модератор'
+                        : me.role === 'guest'
+                          ? 'гость'
+                          : 'пользователь'}
                   </div>
                 </div>
               </div>
@@ -484,8 +577,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                  Ник видят все участники. Значок щита рядом с именем показывает, что вы
-                  администратор.
+                  Ник видят все участники. Значок рядом с именем показывает вашу базовую роль:
+                  администратор, модератор или пользователь.
                 </p>
                 {nicknameError && <p className="mt-1 text-[11px] text-danger">{nicknameError}</p>}
               </div>
@@ -712,9 +805,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <Section icon={Radio} title="Горячие клавиши вещания">
             <div className="space-y-3">
               <p className="text-[11px] leading-relaxed text-muted">
-                Вещание включается и выключается клавишами, кнопок в интерфейсе нет.
+                Нажмите на поле и назначьте любое сочетание клавиш — например Ctrl + Shift + K,
+                F8 или одиночную клавишу.
                 {desktop
-                  ? ' В приложении для Windows назначенные клавиши работают глобально — даже когда окно свёрнуто.'
+                  ? ' В приложении для Windows сочетания и служебные одиночные клавиши работают глобально — даже когда окно свёрнуто. Буквы и цифры без модификатора срабатывают только при активном окне, чтобы не мешать вводу текста.'
                   : ' В браузере клавиши работают, когда вкладка активна; глобальный режим доступен в приложении для Windows.'}
               </p>
               <div className="space-y-2.5">
@@ -732,10 +826,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       <span className="truncate text-sm text-slate-200">{target.name}</span>
                     </div>
                     <div className="flex-1">
-                      <HotkeySelect
+                      <HotkeyRecorder
                         value={target.value}
                         onChange={(value) => setBroadcastKey(target.id, value)}
-                        isUsed={(value) => hotkeyTakenBy(target.id, value)}
                         warning={hotkeyWarning(target.id, target.value)}
                       />
                     </div>

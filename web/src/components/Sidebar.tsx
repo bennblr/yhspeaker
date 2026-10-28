@@ -7,10 +7,13 @@ import {
   Plus,
   Radio,
   Shield,
+  ShieldCheck,
   Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
 import { useApp } from '../lib/store';
 import { cn, serverLabel } from '../lib/utils';
@@ -19,23 +22,34 @@ import { primaryRole, roleLabel } from '../lib/roles';
 
 function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolean }) {
   const roles = useApp((state) => state.roles);
-  const primary = user.role === 'admin' ? null : primaryRole(user, roles);
+  const localMuted = useApp((state) => state.localMuted.includes(user.id));
+  const primary = user.role === 'member' ? primaryRole(user, roles) : null;
 
   return (
     <div
       className="flex items-center gap-2 rounded-md py-1 pl-[30px] pr-2 text-[12px] text-slate-400 transition hover:bg-white/[0.03]"
-      title={`${user.displayName} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
+      title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
     >
       <Avatar id={user.id} name={user.displayName} size="xs" speaking={speaking} />
       <span
-        className={cn('min-w-0 flex-1 truncate', speaking && 'text-ok')}
+        className={cn(
+          'min-w-0 flex-1 truncate',
+          speaking && 'text-ok',
+          localMuted && 'line-through opacity-60',
+        )}
         style={!speaking && primary ? { color: primary.color } : undefined}
       >
         {user.displayName}
       </span>
+      <LabelBadge label={user.label} />
       {user.role === 'admin' && (
         <span title="Администратор" className="shrink-0">
           <Shield className="h-3 w-3 text-accent" />
+        </span>
+      )}
+      {user.role === 'moderator' && (
+        <span title="Модератор" className="shrink-0">
+          <ShieldCheck className="h-3 w-3 text-ok" />
         </span>
       )}
       {primary && (
@@ -45,6 +59,11 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
         />
       )}
       <span className="flex items-center gap-1">
+        {localMuted && (
+          <span title="Вы заглушили этого участника">
+            <VolumeX className="h-3 w-3 text-danger/80" />
+          </span>
+        )}
         {user.broadcasting && <Radio className="h-3 w-3 text-ok" />}
         {user.screenSharing && <MonitorUp className="h-3 w-3 text-accent" />}
         {user.deafened && <HeadphoneOff className="h-3 w-3 text-danger/80" />}
@@ -52,6 +71,23 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
           <MicOff className={cn('h-3 w-3', user.serverMuted ? 'text-danger' : 'text-muted')} />
         )}
       </span>
+    </div>
+  );
+}
+
+function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speaking: Set<string> }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 px-2 pb-1.5 pt-0.5">
+      {users.map((user) => (
+        <span key={user.id} className="relative" title={`${user.displayName}${user.label ? ` (${user.label})` : ''}`}>
+          <Avatar id={user.id} name={user.displayName} size="xs" speaking={speaking.has(user.id)} />
+          {(user.muted || user.serverMuted) && (
+            <span className="absolute -bottom-0.5 -right-0.5 grid h-3.5 w-3.5 place-items-center rounded-full bg-panel text-danger">
+              <MicOff className="h-2.5 w-2.5" />
+            </span>
+          )}
+        </span>
+      ))}
     </div>
   );
 }
@@ -115,11 +151,16 @@ function ChannelRow({
         )}
       </button>
       {channel.type === 'voice' && users.length > 0 && (
-        <div className="mb-1 space-y-0.5">
-          {users.map((user) => (
-            <ParticipantRow key={user.id} user={user} speaking={speaking.has(user.id)} />
-          ))}
-        </div>
+        <>
+          <div className="mb-1 hidden space-y-0.5 md:block">
+            {users.map((user) => (
+              <ParticipantRow key={user.id} user={user} speaking={speaking.has(user.id)} />
+            ))}
+          </div>
+          <div className="md:hidden">
+            <CompactParticipants users={users} speaking={speaking} />
+          </div>
+        </>
       )}
     </div>
   );

@@ -16,7 +16,7 @@ import { connectSocket, getSocket } from './lib/socket';
 import { voice } from './lib/voice';
 import { logout, toast, toggleBroadcastAll, toggleBroadcastGroup } from './lib/actions';
 import { desktop } from './lib/desktop';
-import { matchesPttKey, matchesPttRelease } from './lib/settings';
+import { isGlobalAccelerator, matchesPttKey, matchesPttRelease } from './lib/settings';
 import { cn, isTypingTarget, serverLabel } from './lib/utils';
 import { hasPermission } from '@tsds/shared';
 
@@ -195,6 +195,11 @@ export function App() {
       toast('info', `${byName} отключил вас от канала «${channelName}»`);
     });
 
+    socket.on('voice:moved', ({ channelId, channelName, byName }) => {
+      toast('info', `${byName} переместил вас в канал «${channelName}»`);
+      void voice.join(channelId);
+    });
+
     socket.on('voice:joinFailed', ({ message }) => {
       voice.handleJoinFailed(message);
     });
@@ -308,7 +313,7 @@ export function App() {
     const bindings: { target: string; accelerator: string }[] = [];
     const used = new Set([settings.pttKey]);
     const add = (target: string, accelerator: string | undefined): void => {
-      if (!accelerator || used.has(accelerator)) return;
+      if (!accelerator || used.has(accelerator) || !isGlobalAccelerator(accelerator)) return;
       used.add(accelerator);
       bindings.push({ target, accelerator });
     };
@@ -331,12 +336,17 @@ export function App() {
 
   useEffect(() => {
     if (!canBroadcast) return;
-    if (desktop && globalHotkeys) return;
+    const desktopHotkeys = Boolean(desktop && globalHotkeys);
     const down = (event: KeyboardEvent) => {
       if (event.repeat || isTypingTarget(event.target)) return;
       const state = useApp.getState();
       const keys = state.settings.broadcastKeys;
-      if (keys.all && keys.all !== state.settings.pttKey && matchesPttKey(event, keys.all)) {
+      if (
+        keys.all &&
+        keys.all !== state.settings.pttKey &&
+        !(desktopHotkeys && isGlobalAccelerator(keys.all)) &&
+        matchesPttKey(event, keys.all)
+      ) {
         event.preventDefault();
         toggleBroadcastAll();
         return;
@@ -344,6 +354,7 @@ export function App() {
       for (const group of state.broadcastGroups) {
         const accelerator = keys.groups[group.id];
         if (!accelerator || accelerator === state.settings.pttKey) continue;
+        if (desktopHotkeys && isGlobalAccelerator(accelerator)) continue;
         if (matchesPttKey(event, accelerator)) {
           event.preventDefault();
           toggleBroadcastGroup(group.id);

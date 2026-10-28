@@ -10,3 +10,5 @@ web/dist/
 server/dist/
 desktop/release/
 desktop/release-*/
+desktop-installer/*
+!desktop-installer/.gitkeep
