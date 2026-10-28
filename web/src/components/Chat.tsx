@@ -22,6 +22,7 @@ export function Chat({ channelId, placeholder }: { channelId: string; placeholde
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottom = useRef(true);
   const canModerate = useCan('moderate');
+  const isGuest = useApp((state) => state.me?.isGuest ?? false);
 
   useEffect(() => {
     setText('');
@@ -79,9 +80,13 @@ export function Chat({ channelId, placeholder }: { channelId: string; placeholde
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-panel2">
               <MessageSquare className="h-5 w-5" />
             </div>
-            <p className="text-sm font-medium text-slate-300">Здесь пока тихо</p>
-            <p className="max-w-[240px] text-xs leading-relaxed">
-              Напишите первое сообщение — его увидят все участники сервера.
+            <p className="text-sm font-medium text-slate-300">
+              {isGuest ? 'История чата скрыта' : 'Здесь пока тихо'}
+            </p>
+            <p className="max-w-[260px] text-xs leading-relaxed">
+              {isGuest
+                ? 'История станет доступна после того, как модератор примет вас на сервере. Сообщения, отправленные при вас, вы видите.'
+                : 'Напишите первое сообщение — его увидят все участники сервера.'}
             </p>
           </div>
         ) : (

@@ -58,6 +58,7 @@ export interface AppState {
 
   setToken: (token: string | null) => void;
   applyInit: (state: InitState) => void;
+  setMe: (me: OnlineUser) => void;
   applyUsers: (users: OnlineUser[]) => void;
   applyChannels: (channels: Channel[]) => void;
   setBroadcastGroups: (groups: BroadcastGroup[]) => void;
@@ -171,6 +172,8 @@ export const useApp = create<AppState>((set, get) => ({
       channelLock: null,
     });
   },
+
+  setMe: (me) => set({ me }),
 
   applyUsers: (users) => {
     const me = get().me;

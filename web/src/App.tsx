@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Lock, Menu, Radio, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
@@ -67,6 +67,7 @@ function Shell({ serverName, children }: { serverName: string; children: React.R
 
 export function App() {
   const token = useApp((state) => state.token);
+  const tokenRef = useRef(token);
   const me = useApp((state) => state.me);
   const connection = useApp((state) => state.connection);
   const channels = useApp((state) => state.channels);
@@ -79,6 +80,10 @@ export function App() {
   const broadcastGroups = useApp((state) => state.broadcastGroups);
   const canManageChannels = hasPermission(me, roles, 'channels');
   const canBroadcast = hasPermission(me, roles, 'broadcast');
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const [serverConfig, setServerConfig] = useState<PublicServerConfig | null>(null);
   const [configError, setConfigError] = useState(false);
@@ -144,6 +149,10 @@ export function App() {
     socket.on('state:init', (init) => {
       useApp.getState().applyInit(init);
       void voice.initDevice(init.routerRtpCapabilities);
+    });
+
+    socket.on('state:me', (next) => {
+      useApp.getState().setMe(next);
     });
 
     socket.on('state:users', (users) => {
@@ -215,6 +224,7 @@ export function App() {
 
     socket.on('session:token', ({ token: nextToken }) => {
       // Zustand-токен не трогаем: его смена пересоздала бы сокет и голосовую сессию.
+      tokenRef.current = nextToken;
       localStorage.setItem('yhspeak.token', nextToken);
     });
 
@@ -225,10 +235,10 @@ export function App() {
   }, [token]);
 
   useEffect(() => {
-    if (!token || !activeChannelId || connection !== 'online') return;
+    if (!token || !activeChannelId || connection !== 'online' || !me || me.isGuest) return;
     let cancelled = false;
     api
-      .messages(activeChannelId, token)
+      .messages(activeChannelId, tokenRef.current ?? token)
       .then((result) => {
         if (!cancelled) useApp.getState().setMessages(activeChannelId, result.messages);
       })
@@ -236,7 +246,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [token, activeChannelId, connection]);
+  }, [token, activeChannelId, connection, me?.isGuest]);
 
   useEffect(() => {
     if (!me) {

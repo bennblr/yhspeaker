@@ -460,6 +460,10 @@ app.get(
     if (!canAccessChannel(account, channel)) {
       throw new HttpError(403, 'Канал недоступен');
     }
+    if (account.isGuest) {
+      res.json({ messages: [] });
+      return;
+    }
     const limit = Number.parseInt(String(req.query.limit ?? '100'), 10);
     res.json({ messages: store.messages(channel.id, Number.isFinite(limit) ? limit : 100) });
   }),
@@ -1358,7 +1362,7 @@ io.on('connection', async (socket: AppSocket) => {
           displayName: target.displayName,
         });
         if (target.label) store.setLabel(targetId, target.label);
-        sessions.update(targetId, {
+        const updated = sessions.update(targetId, {
           username: result.username,
           role: result.account.role,
           roleIds: [],
@@ -1367,7 +1371,11 @@ io.on('connection', async (socket: AppSocket) => {
         for (const [socketId, account] of socketAccounts) {
           if (account.id === targetId) socketAccounts.set(socketId, result.account);
         }
-        sessions.getSocket(targetId)?.emit('session:token', { token: result.token });
+        const targetSocket = sessions.getSocket(targetId);
+        if (targetSocket) {
+          targetSocket.emit('session:token', { token: result.token });
+          if (updated) targetSocket.emit('state:me', updated);
+        }
         sessions.getSocket(targetId)?.emit('toast', {
           type: 'ok',
           text: 'Вам назначена роль Пользователь — доступны каналы для участников',

@@ -360,6 +360,7 @@ export interface AuthorizeGuestResult extends AckResult {
 
 export interface ServerToClientEvents {
   'state:init': (state: InitState) => void;
+  'state:me': (me: OnlineUser) => void;
   'state:users': (users: OnlineUser[]) => void;
   'channels:update': (channels: Channel[]) => void;
   'groups:update': (groups: BroadcastGroup[]) => void;
