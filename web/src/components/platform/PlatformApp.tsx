@@ -545,7 +545,7 @@ export function PlatformApp() {
               <ShieldCheck className="h-6 w-6" />
             </span>
             <div>
-              <h1 className="text-lg font-semibold text-slate-100">YHSpeak Platform</h1>
+              <h1 className="text-lg font-semibold text-slate-100">LA2Speak Platform</h1>
               <p className="text-xs text-muted">Панель управления серверами</p>
             </div>
           </div>
@@ -608,7 +608,7 @@ export function PlatformApp() {
               <ShieldCheck className="h-5 w-5" />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-slate-100">YHSpeak Platform</p>
+              <p className="truncate text-sm font-semibold text-slate-100">LA2Speak Platform</p>
               <p className="truncate text-[11px] text-muted">
                 {admin} · v{meta?.version ?? '—'}
               </p>

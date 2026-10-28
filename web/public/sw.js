@@ -1,4 +1,4 @@
-const VERSION = 'yhspeak-v1';
+const VERSION = 'la2speak-v1';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 

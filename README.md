@@ -1,4 +1,4 @@
-# YHSpeak — платформа голосовых серверов
+# LA2Speak — платформа голосовых серверов
 
 Самостоятельно размещаемая платформа в духе TeamSpeak/Discord: админка создаёт
 изолированные голосовые серверы, каждому можно привязать собственный домен.
@@ -136,10 +136,10 @@ sudo systemctl enable --now docker
 
 ### 3. Конфигурация
 
-Скопируйте проект на сервер, например в `/opt/yhspeak`, и создайте `.env`:
+Скопируйте проект на сервер, например в `/opt/la2speak`, и создайте `.env`:
 
 ```bash
-cd /opt/yhspeak
+cd /opt/la2speak
 cp .env.example .env
 openssl rand -hex 32        # PLATFORM_JWT_SECRET
 openssl rand -hex 32        # PLATFORM_SECRET_KEY (другая строка)
@@ -203,7 +203,7 @@ docker compose logs -f platform caddy
 ### 5. Обновление
 
 ```bash
-cd /opt/yhspeak
+cd /opt/la2speak
 git pull
 docker compose up -d --build
 ```
@@ -213,9 +213,9 @@ docker compose up -d --build
 ### Резервная копия
 
 ```bash
-cd /opt/yhspeak
-docker run --rm -v yhspeak_platform-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/yhspeak-platform-$(date +%F).tgz -C /data .
+cd /opt/la2speak
+docker run --rm -v la2speak_platform-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/la2speak-platform-$(date +%F).tgz -C /data .
 ```
 
 Для консистентной копии остановите платформу на несколько секунд:
@@ -361,7 +361,7 @@ npm install
 npm run dist:desktop
 ```
 
-Готовый установщик: `desktop/release/YHSpeak-Setup-1.0.1.exe` (NSIS, x64).
+Готовый установщик: `desktop/release/LA2Speak-Setup-1.0.1.exe` (NSIS, x64).
 
 Установщик можно раздавать прямо из голосового канала. Положите `.exe` в каталог
 `desktop-installer/` рядом с `docker-compose.yml` (или задайте свой каталог в
@@ -373,8 +373,8 @@ npm run dist:desktop
 из `desktop/release/`.
 
 ```bash
-scp desktop/release/YHSpeak-Setup-1.0.1.exe root@<сервер>:/opt/yhspeak/desktop-installer/
-cd /opt/yhspeak
+scp desktop/release/LA2Speak-Setup-1.0.1.exe root@<сервер>:/opt/la2speak/desktop-installer/
+cd /opt/la2speak
 docker compose up -d platform
 ```
 

@@ -83,8 +83,8 @@ export interface AppState {
   logoutLocal: () => void;
 }
 
-const lastChannel = localStorage.getItem('yhspeak.lastChannel');
-const LOCAL_MUTED_KEY = 'yhspeak.localMuted';
+const lastChannel = localStorage.getItem('la2speak.lastChannel');
+const LOCAL_MUTED_KEY = 'la2speak.localMuted';
 let toastSeq = 0;
 
 function loadLocalMuted(): string[] {
@@ -108,13 +108,13 @@ function pickDefaultChannel(
 ): string | null {
   const available = channels.filter((channel) => canOpenChannel(channel, unlocked, isAdmin));
   if (current && available.some((channel) => channel.id === current)) return current;
-  const saved = localStorage.getItem('yhspeak.lastChannel');
+  const saved = localStorage.getItem('la2speak.lastChannel');
   if (saved && available.some((channel) => channel.id === saved)) return saved;
   return available.find((channel) => channel.type === 'text')?.id ?? available[0]?.id ?? null;
 }
 
 export const useApp = create<AppState>((set, get) => ({
-  token: localStorage.getItem('yhspeak.token'),
+  token: localStorage.getItem('la2speak.token'),
   me: null,
   users: [],
   channels: [],
@@ -144,8 +144,8 @@ export const useApp = create<AppState>((set, get) => ({
   toasts: [],
 
   setToken: (token) => {
-    if (token) localStorage.setItem('yhspeak.token', token);
-    else localStorage.removeItem('yhspeak.token');
+    if (token) localStorage.setItem('la2speak.token', token);
+    else localStorage.removeItem('la2speak.token');
     set({ token });
   },
 
@@ -158,7 +158,7 @@ export const useApp = create<AppState>((set, get) => ({
       unlockedChannels,
       state.me.role === 'admin',
     );
-    if (activeChannelId) localStorage.setItem('yhspeak.lastChannel', activeChannelId);
+    if (activeChannelId) localStorage.setItem('la2speak.lastChannel', activeChannelId);
     set({
       me: state.users.find((user) => user.id === state.me.id) ?? state.me,
       users: state.users,
@@ -194,7 +194,7 @@ export const useApp = create<AppState>((set, get) => ({
       unlockedChannels,
       state.me?.role === 'admin',
     );
-    if (active) localStorage.setItem('yhspeak.lastChannel', active);
+    if (active) localStorage.setItem('la2speak.lastChannel', active);
     set({ channels, activeChannelId: active, unlockedChannels });
   },
 
@@ -205,7 +205,7 @@ export const useApp = create<AppState>((set, get) => ({
   setConnection: (connection) => set({ connection }),
 
   setActiveChannel: (channelId) => {
-    localStorage.setItem('yhspeak.lastChannel', channelId);
+    localStorage.setItem('la2speak.lastChannel', channelId);
     set((state) => ({
       activeChannelId: channelId,
       unread: { ...state.unread, [channelId]: 0 },
@@ -312,7 +312,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   logoutLocal: () => {
-    localStorage.removeItem('yhspeak.token');
+    localStorage.removeItem('la2speak.token');
     set({
       token: null,
       me: null,

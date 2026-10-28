@@ -225,7 +225,7 @@ export function App() {
     socket.on('session:token', ({ token: nextToken }) => {
       // Zustand-токен не трогаем: его смена пересоздала бы сокет и голосовую сессию.
       tokenRef.current = nextToken;
-      localStorage.setItem('yhspeak.token', nextToken);
+      localStorage.setItem('la2speak.token', nextToken);
     });
 
     return () => {

@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "YHSpeak — голосовой сервер",
-  "short_name": "YHSpeak",
+  "name": "LA2Speak — голосовой сервер",
+  "short_name": "LA2Speak",
   "description": "Голосовые и текстовые каналы, роли и вещание — прямо в браузере.",
   "lang": "ru",
   "start_url": "/",

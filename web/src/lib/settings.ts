@@ -185,7 +185,7 @@ export const DEFAULT_SETTINGS: MicSettings = {
   broadcastKeys: { all: 'Alt+1', groups: {} },
 };
 
-const STORAGE_KEY = 'yhspeak.settings.v1';
+const STORAGE_KEY = 'la2speak.settings.v1';
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;

@@ -16,7 +16,7 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const { DEFAULT_SERVER_DOMAIN, normalizeServerUrl } = require('./server-url');
 
-app.setAppUserModelId('ru.yhspeak.client');
+app.setAppUserModelId('ru.la2speak.client');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // Расширенное эхоподавление: учитывает звук, воспроизводимый не только через WebRTC.
 app.commandLine.appendSwitch('enable-features', 'ChromeWideEchoCancellation');
@@ -77,7 +77,7 @@ function createMainWindow(serverUrl) {
     minWidth: 960,
     minHeight: 600,
     backgroundColor: '#0b0d12',
-    title: 'YHSpeak',
+    title: 'LA2Speak',
     icon: iconPath(),
     frame: false,
     show: false,
@@ -128,7 +128,7 @@ function createMainWindow(serverUrl) {
       .showMessageBox({
         type: 'error',
         title: 'Нет связи с сервером',
-        message: 'Не удалось открыть сервер YHSpeak',
+        message: 'Не удалось открыть сервер LA2Speak',
         detail: `${serverUrl}\n${description || code}`,
         buttons: ['Повторить', 'Сменить сервер', 'Выход'],
         defaultId: 0,
@@ -174,7 +174,7 @@ function openLauncher() {
     maximizable: false,
     minimizable: true,
     backgroundColor: '#0b0d12',
-    title: 'YHSpeak — подключение',
+    title: 'LA2Speak — подключение',
     icon: iconPath(),
     frame: false,
     show: false,
@@ -432,13 +432,13 @@ function buildMenu() {
       label: 'Справка',
       submenu: [
         {
-          label: 'О программе YHSpeak',
+          label: 'О программе LA2Speak',
           click: () => {
             void dialog.showMessageBox({
               type: 'info',
-              title: 'YHSpeak',
-              message: `YHSpeak ${app.getVersion()}`,
-              detail: 'Клиент голосового сервера YHSpeak.\nВещание администратора во все каналы, экран, текст и модерация.',
+              title: 'LA2Speak',
+              message: `LA2Speak ${app.getVersion()}`,
+              detail: 'Клиент голосового сервера LA2Speak.\nВещание администратора во все каналы, экран, текст и модерация.',
               buttons: ['ОК'],
             });
           },

@@ -30,9 +30,10 @@ function envBool(name: string, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
-// Совместимость с развёртываниями, где сервер ещё назывался TSDS.
+// Совместимость с развёртываниями, где сервер назывался TSDS или YHSpeak.
 function normalizeServerName(value: string): string {
-  return value.toLowerCase() === 'tsds' ? 'YHSpeak' : value;
+  const name = value.toLowerCase();
+  return name === 'tsds' || name === 'yhspeak' ? 'LA2Speak' : value;
 }
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -76,7 +77,7 @@ export const config: AppConfig = {
   isProduction,
   port: envInt('PORT', 4000),
   host: envString('HOST', '0.0.0.0'),
-  serverName: normalizeServerName(envString('SERVER_NAME', 'YHSpeak')),
+  serverName: normalizeServerName(envString('SERVER_NAME', 'LA2Speak')),
   dataDir: path.resolve(rootDir, envString('DATA_DIR', 'data')),
   webDistDir: path.join(rootDir, 'web', 'dist'),
   desktopInstallerDir: path.resolve(

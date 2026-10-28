@@ -33,9 +33,9 @@ export function DesktopTitleBar({ serverName }: { serverName: string }) {
           <Radio className="h-3 w-3 text-white" />
         </div>
         <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-300">
-          YHSpeak
+          LA2Speak
         </span>
-        {serverName !== 'YHSpeak' && (
+        {serverName !== 'LA2Speak' && (
           <>
             <div className="mx-0.5 h-3.5 w-px bg-line" />
             <span className="truncate text-[11px] text-muted">{serverName}</span>

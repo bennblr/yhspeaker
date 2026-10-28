@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('yhspeak', {
+contextBridge.exposeInMainWorld('la2speak', {
   isDesktop: true,
   platform: process.platform,
   setPttKey: (accelerator) => ipcRenderer.invoke('ptt:set-key', accelerator),

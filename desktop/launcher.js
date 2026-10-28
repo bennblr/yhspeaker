@@ -25,7 +25,7 @@ async function init() {
   try {
     const current = await window.launcher.currentUrl();
     if (current) input.value = current;
-    const version = await window.yhspeak.getVersion();
+    const version = await window.la2speak.getVersion();
     if (version) versionLabel.textContent = version;
     const domain = await window.launcher.defaultDomain();
     if (domain) {
@@ -77,11 +77,11 @@ quitButton.addEventListener('click', () => {
 });
 
 minimizeButton.addEventListener('click', () => {
-  void window.yhspeak.windowControls.minimize();
+  void window.la2speak.windowControls.minimize();
 });
 
 closeButton.addEventListener('click', () => {
-  void window.yhspeak.windowControls.close();
+  void window.la2speak.windowControls.close();
 });
 
 void init();

@@ -1,7 +1,7 @@
 services:
   platform:
     build: .
-    image: yhspeak-platform:latest
+    image: la2speak-platform:latest
     restart: unless-stopped
     network_mode: host
     env_file: .env

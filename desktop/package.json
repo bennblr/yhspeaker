@@ -2,8 +2,8 @@
   "name": "@tsds/desktop",
   "version": "1.0.1",
   "private": true,
-  "description": "YHSpeak desktop client for Windows",
-  "author": "YHSpeak",
+  "description": "LA2Speak desktop client for Windows",
+  "author": "LA2Speak",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -14,8 +14,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "ru.yhspeak.client",
-    "productName": "YHSpeak",
+    "appId": "ru.la2speak.client",
+    "productName": "LA2Speak",
     "beforeBuild": "before-build.js",
     "directories": {
       "output": "release",
@@ -55,13 +55,13 @@
         }
       ],
       "icon": "build/icon.png",
-      "artifactName": "YHSpeak-Setup-${version}.${ext}"
+      "artifactName": "LA2Speak-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "YHSpeak"
+      "shortcutName": "LA2Speak"
     }
   },
   "dependencies": {

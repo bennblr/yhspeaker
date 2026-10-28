@@ -83,7 +83,7 @@ export class PlatformApiError extends Error {
   }
 }
 
-const TOKEN_KEY = 'yhspeak.platform.token';
+const TOKEN_KEY = 'la2speak.platform.token';
 
 export function loadPlatformToken(): string | null {
   try {

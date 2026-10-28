@@ -26,9 +26,9 @@ export interface DesktopBridge {
 
 declare global {
   interface Window {
-    yhspeak?: DesktopBridge;
+    la2speak?: DesktopBridge;
   }
 }
 
 export const desktop: DesktopBridge | null =
-  typeof window !== 'undefined' && window.yhspeak ? window.yhspeak : null;
+  typeof window !== 'undefined' && window.la2speak ? window.la2speak : null;

@@ -609,7 +609,7 @@ export class VoiceEngine {
         element.setAttribute('playsinline', '');
         element.volume = Math.max(0, Math.min(1, this.mySettings().outputVolume));
         element.muted = this.deafened || this.localMuted.has(params.userId);
-        element.setAttribute('data-yhspeak-audio', params.userId);
+        element.setAttribute('data-la2speak-audio', params.userId);
         document.body.appendChild(element);
         void element.play().catch(() => undefined);
         this.audioElements.set(consumer.id, element);

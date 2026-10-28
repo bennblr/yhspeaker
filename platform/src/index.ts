@@ -635,7 +635,7 @@ app.get('/api/desktop', (_req, res) => {
 app.get('/download/windows', (_req, res) => {
   const installer = findDesktopInstaller();
   if (!installer) {
-    res.status(404).type('text/plain').send('Установщик YHSpeak для Windows пока не загружен.');
+    res.status(404).type('text/plain').send('Установщик LA2Speak для Windows пока не загружен.');
     return;
   }
   res.download(installer.file, installer.name);
@@ -800,7 +800,7 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
 httpServer.listen(config.port, config.bind, () => {
-  console.log(`[platform] YHSpeak Platform ${APP_VERSION} слушает http://${config.bind}:${config.port}`);
+  console.log(`[platform] LA2Speak Platform ${APP_VERSION} слушает http://${config.bind}:${config.port}`);
   console.log(`[platform] админка: http://127.0.0.1:${config.port}/platform`);
   console.log(`[platform] публичный хост панели: ${config.publicHost || 'не задан'}`);
   console.log(`[platform] ANNOUNCED_IP=${config.announcedIp}, HTTP ${config.httpPortStart}-${config.httpPortEnd}, RTC ${config.rtcPoolStart}-${config.rtcPoolEnd}`);

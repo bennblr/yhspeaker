@@ -2,12 +2,12 @@ export function cn(...values: Array<string | false | null | undefined>): string 
   return values.filter(Boolean).join(' ');
 }
 
-const LEGACY_SERVER_NAMES = new Set(['tsds']);
+const LEGACY_SERVER_NAMES = new Set(['tsds', 'yhspeak']);
 
 // Старое имя сервера до переименования приложения.
 export function serverLabel(name: string | null | undefined): string {
   const value = name?.trim();
-  if (!value || LEGACY_SERVER_NAMES.has(value.toLowerCase())) return 'YHSpeak';
+  if (!value || LEGACY_SERVER_NAMES.has(value.toLowerCase())) return 'LA2Speak';
   return value;
 }
 

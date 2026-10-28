@@ -694,7 +694,7 @@ app.get('/api/desktop', (_req, res) => {
 app.get('/download/windows', (_req, res) => {
   const installer = findDesktopInstaller();
   if (!installer) {
-    res.status(404).type('text/plain').send('Установщик YHSpeak для Windows пока не загружен.');
+    res.status(404).type('text/plain').send('Установщик LA2Speak для Windows пока не загружен.');
     return;
   }
   res.download(installer.file, installer.name);
@@ -728,7 +728,7 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
 } else {
   console.warn(`[web] Сборка веб-клиента не найдена: ${webDist}. Запустите npm run build.`);
   app.get('/', (_req, res) => {
-    res.type('text/plain').send('YHSpeak: веб-клиент ещё не собран. Выполните npm run build.');
+    res.type('text/plain').send('LA2Speak: веб-клиент ещё не собран. Выполните npm run build.');
   });
 }
 
