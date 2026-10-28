@@ -361,7 +361,7 @@ npm install
 npm run dist:desktop
 ```
 
-Готовый установщик: `desktop/release/LA2Speak-Setup-1.0.1.exe` (NSIS, x64).
+Готовый установщик: `desktop/release/LA2Speak-Setup-1.0.2.exe` (NSIS, x64).
 
 Установщик можно раздавать прямо из голосового канала. Положите `.exe` в каталог
 `desktop-installer/` рядом с `docker-compose.yml` (или задайте свой каталог в
@@ -373,7 +373,7 @@ npm run dist:desktop
 из `desktop/release/`.
 
 ```bash
-scp desktop/release/LA2Speak-Setup-1.0.1.exe root@<сервер>:/opt/la2speak/desktop-installer/
+scp desktop/release/LA2Speak-Setup-1.0.2.exe root@<сервер>:/opt/la2speak/desktop-installer/
 cd /opt/la2speak
 docker compose up -d platform
 ```
@@ -386,11 +386,11 @@ docker compose up -d platform
 - Если electron-builder падает при распаковке `winCodeSign` с ошибкой создания символических
   ссылок, включите в Windows «Режим разработчика» (Параметры → Система → Для разработчиков)
   или запустите терминал от имени администратора.
-- При первом запуске приложение попросит адрес сервера. Можно ввести полный адрес
-  `https://chat.example.com`, имя хоста `chat.example.com` или только короткое имя
-  `chat` — тогда клиент подключится к `chat.la2speak.com` (домен по умолчанию задан
-  в `desktop/server-url.js`). Адрес запоминается; сменить его можно кнопкой
-  **«Сервер»** в верхней шапке приложения.
+- При первом запуске клиент сразу подключается к `https://la2speak.com` (домен задан
+  в `desktop/main.js`). Ввести другой сервер можно полным адресом
+  `https://chat.example.com`, именем хоста `chat.example.com` или коротким именем
+  `chat` — тогда клиент подключится к `chat.la2speak.com`. Адрес запоминается; сменить его
+  можно кнопкой **«Сервер»** в верхней шапке приложения.
 - Окно клиента использует собственную шапку в стиле приложения вместо стандартной рамки
   Windows: в ней есть название сервера, состояние подключения и кнопки свернуть /
   развернуть / закрыть. Шапку можно перетаскивать, двойной щелчок разворачивает окно.

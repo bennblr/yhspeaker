@@ -16,6 +16,11 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const { DEFAULT_SERVER_DOMAIN, normalizeServerUrl } = require('./server-url');
 
+const DEFAULT_SERVER_URL = `https://${DEFAULT_SERVER_DOMAIN}`;
+
+// Без явного имени папка данных установленного клиента совпадает с dev-сборками,
+// и сохранённый там http://127.0.0.1:4000 попадает в релиз.
+if (app.isPackaged) app.setName('LA2Speak');
 app.setAppUserModelId('ru.la2speak.client');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // Расширенное эхоподавление: учитывает звук, воспроизводимый не только через WebRTC.
@@ -58,6 +63,13 @@ function saveConfig(config) {
 }
 
 let stored = loadConfig();
+
+function resolveStartUrl() {
+  const saved = stored.serverUrl ? normalizeServerUrl(stored.serverUrl) : null;
+  const localSaved = saved && /^https?:\/\/(localhost|127\.0\.0\.1)(?::|\/|$)/i.test(saved);
+  if (saved && !(app.isPackaged && localSaved)) return saved;
+  return DEFAULT_SERVER_URL;
+}
 
 function iconPath() {
   return path.join(__dirname, 'build', 'icon.png');
@@ -524,16 +536,11 @@ if (!singleInstance) {
     startKeyboardHook();
     setAccelerator(stored.pttKey);
 
-    if (stored.serverUrl && normalizeServerUrl(stored.serverUrl)) {
-      createMainWindow(normalizeServerUrl(stored.serverUrl));
-    } else {
-      openLauncher();
-    }
+    createMainWindow(resolveStartUrl());
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        if (stored.serverUrl) createMainWindow(stored.serverUrl);
-        else openLauncher();
+        createMainWindow(resolveStartUrl());
       }
     });
   });
