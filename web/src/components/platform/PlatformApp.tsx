@@ -141,6 +141,45 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 Б';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / 1024 ** index;
+  return `${value >= 100 || index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
+}
+
+function LoadCard({
+  label,
+  percent,
+  detail,
+  title,
+}: {
+  label: string;
+  percent: number;
+  detail: string;
+  title?: string;
+}) {
+  const clamped = Math.min(100, Math.max(0, percent));
+  const tone =
+    clamped >= 90 ? 'bg-danger' : clamped >= 70 ? 'bg-warn' : 'bg-ok';
+  return (
+    <div className="card px-4 py-3" title={title}>
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+        <p className="text-sm font-semibold text-slate-100">{Math.round(clamped)}%</p>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-panel3">
+        <div
+          className={cn('h-full rounded-full transition-[width] duration-700', tone)}
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted">{detail}</p>
+    </div>
+  );
+}
+
 function StatusBadge({ status }: { status: PlatformStatus }) {
   const info = STATUS[status];
   return (
@@ -252,6 +291,7 @@ export function PlatformApp() {
 
   const servers = overview?.servers ?? [];
   const meta: PlatformMeta | null = overview?.meta ?? null;
+  const system = overview?.system ?? null;
 
   const stats = useMemo(() => {
     const running = servers.filter((server) => server.status === 'running').length;
@@ -623,6 +663,31 @@ export function PlatformApp() {
           <Stat label="Домены" value={String(stats.domains)} />
           <Stat label="Мест" value={String(stats.places)} hint="суммарно по серверам" />
         </div>
+
+        {system && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <LoadCard
+              label="Процессор"
+              percent={system.cpu.percent}
+              detail={`${system.cpu.cores} ядр. · нагрузка ${system.cpu.load1.toFixed(2)}`}
+              title={`Средняя загрузка CPU за последние секунды. load average: ${system.cpu.load1} / ${system.cpu.load5} / ${system.cpu.load15}`}
+            />
+            <LoadCard
+              label="Память"
+              percent={system.memory.percent}
+              detail={`${formatBytes(system.memory.used)} из ${formatBytes(system.memory.total)}`}
+              title="Использованная оперативная память сервера"
+            />
+            {system.disk && (
+              <LoadCard
+                label="Диск"
+                percent={system.disk.percent}
+                detail={`${formatBytes(system.disk.used)} из ${formatBytes(system.disk.total)}`}
+                title="Занято на системном разделе сервера"
+              />
+            )}
+          </div>
+        )}
 
         <div className="mt-6 flex flex-wrap items-end justify-between gap-3">
           <div>

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -210,6 +211,80 @@ function platformMeta() {
   };
 }
 
+function cpuTimes() {
+  let idle = 0;
+  let total = 0;
+  for (const cpu of os.cpus()) {
+    const times = cpu.times;
+    idle += times.idle;
+    total += times.user + times.nice + times.sys + times.idle + times.irq;
+  }
+  return { idle, total };
+}
+
+let lastCpuTimes = cpuTimes();
+let cpuPercent = 0;
+
+setInterval(() => {
+  const current = cpuTimes();
+  const totalDelta = current.total - lastCpuTimes.total;
+  const idleDelta = current.idle - lastCpuTimes.idle;
+  if (totalDelta > 0) {
+    cpuPercent = Math.min(100, Math.max(0, (1 - idleDelta / totalDelta) * 100));
+    lastCpuTimes = current;
+  }
+}, 3000).unref();
+
+function memoryMetrics() {
+  const total = os.totalmem();
+  let available = os.freemem();
+  try {
+    const match = /^MemAvailable:\s+(\d+)\s+kB/im.exec(fs.readFileSync('/proc/meminfo', 'utf8'));
+    if (match) available = Number(match[1]) * 1024;
+  } catch {
+    /* не Linux — используем os.freemem */
+  }
+  const used = Math.max(0, total - available);
+  return { total, used, percent: total > 0 ? (used / total) * 100 : 0 };
+}
+
+function diskMetrics() {
+  try {
+    const stat = fs.statfsSync('/');
+    const total = stat.blocks * stat.bsize;
+    const free = stat.bavail * stat.bsize;
+    const used = Math.max(0, total - free);
+    return { total, used, percent: total > 0 ? (used / total) * 100 : 0 };
+  } catch {
+    return null;
+  }
+}
+
+function systemMetrics() {
+  const load = os.loadavg();
+  const memory = memoryMetrics();
+  const disk = diskMetrics();
+  return {
+    cpu: {
+      percent: Number(cpuPercent.toFixed(1)),
+      cores: os.cpus().length,
+      load1: Number(load[0].toFixed(2)),
+      load5: Number(load[1].toFixed(2)),
+      load15: Number(load[2].toFixed(2)),
+    },
+    memory: {
+      percent: Number(memory.percent.toFixed(1)),
+      used: memory.used,
+      total: memory.total,
+    },
+    disk: disk && {
+      percent: Number(disk.percent.toFixed(1)),
+      used: disk.used,
+      total: disk.total,
+    },
+  };
+}
+
 // ---------- rate limiting ----------
 
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -309,6 +384,7 @@ platformApi.get('/overview', requireAdmin, (_req, res) => {
   res.json({
     servers: store.servers().map(serverView),
     meta: platformMeta(),
+    system: systemMetrics(),
   });
 });
 

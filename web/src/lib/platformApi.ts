@@ -38,9 +38,30 @@ export interface PlatformMeta {
   };
 }
 
+export interface PlatformSystem {
+  cpu: {
+    percent: number;
+    cores: number;
+    load1: number;
+    load5: number;
+    load15: number;
+  };
+  memory: {
+    percent: number;
+    used: number;
+    total: number;
+  };
+  disk: {
+    percent: number;
+    used: number;
+    total: number;
+  } | null;
+}
+
 export interface PlatformOverview {
   servers: PlatformServer[];
   meta: PlatformMeta;
+  system: PlatformSystem;
 }
 
 export interface TenantCredentials {
