@@ -532,6 +532,9 @@ app.use(
     maxAge: '1h',
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+      if (filePath.endsWith('sw.js') || filePath.endsWith('manifest.webmanifest')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
     },
   }),
 );
