@@ -170,7 +170,26 @@ function serverView(server: TenantRecord) {
   };
 }
 
+function findDesktopInstaller(): { file: string; name: string; size: number } | null {
+  try {
+    const candidates = fs
+      .readdirSync(config.desktopInstallerDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.exe$/i.test(entry.name))
+      .map((entry) => {
+        const file = path.join(config.desktopInstallerDir, entry.name);
+        const stat = fs.statSync(file);
+        return { file, name: entry.name, size: stat.size, mtime: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    const newest = candidates[0];
+    return newest ? { file: newest.file, name: newest.name, size: newest.size } : null;
+  } catch {
+    return null;
+  }
+}
+
 function platformMeta() {
+  const installer = findDesktopInstaller();
   return {
     publicHost: config.publicHost,
     tenantDomainSuffix: config.tenantDomainSuffix,
@@ -183,6 +202,11 @@ function platformMeta() {
     maxParticipantsLimit: MAX_VOICE_PARTICIPANTS,
     adminLogin: store.adminLogin,
     version: APP_VERSION,
+    desktop: {
+      available: Boolean(installer),
+      fileName: installer?.name ?? null,
+      size: installer?.size ?? 0,
+    },
   };
 }
 
@@ -518,6 +542,27 @@ app.get('/api/tls/ask', (req, res) => {
     return;
   }
   res.status(404).type('text/plain').send('unknown domain');
+});
+
+// ---------- desktop app download ----------
+
+app.get('/api/desktop', (_req, res) => {
+  const installer = findDesktopInstaller();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    available: Boolean(installer),
+    fileName: installer?.name ?? null,
+    size: installer?.size ?? 0,
+  });
+});
+
+app.get('/download/windows', (_req, res) => {
+  const installer = findDesktopInstaller();
+  if (!installer) {
+    res.status(404).type('text/plain').send('Установщик YHSpeak для Windows пока не загружен.');
+    return;
+  }
+  res.download(installer.file, installer.name);
 });
 
 // ---------- platform admin UI ----------

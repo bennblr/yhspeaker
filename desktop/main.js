@@ -14,6 +14,7 @@ const {
 const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { DEFAULT_SERVER_DOMAIN, normalizeServerUrl } = require('./server-url');
 
 app.setAppUserModelId('ru.yhspeak.client');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -57,21 +58,6 @@ function saveConfig(config) {
 }
 
 let stored = loadConfig();
-
-function normalizeServerUrl(value) {
-  if (typeof value !== 'string') return null;
-  let raw = value.trim();
-  if (!raw) return null;
-  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-    if (!url.hostname) return null;
-    return url.origin;
-  } catch {
-    return null;
-  }
-}
 
 function iconPath() {
   return path.join(__dirname, 'build', 'icon.png');
@@ -379,10 +365,12 @@ ipcMain.handle('app:change-server', () => {
 
 ipcMain.handle('launcher:current-url', () => stored.serverUrl || '');
 
+ipcMain.handle('launcher:default-domain', () => DEFAULT_SERVER_DOMAIN);
+
 ipcMain.handle('launcher:connect', (_event, value) => {
   const url = normalizeServerUrl(value);
   if (!url) {
-    return { ok: false, error: 'Укажите корректный адрес, например https://voice.example.com' };
+    return { ok: false, error: 'Укажите адрес сервера, например chat или chat.la2speak.com' };
   }
   stored.serverUrl = url;
   saveConfig(stored);

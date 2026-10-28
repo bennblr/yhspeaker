@@ -5,6 +5,7 @@ const input = document.getElementById('server');
 const error = document.getElementById('error');
 const connectButton = document.getElementById('connect');
 const connectLabel = document.getElementById('connect-label');
+const hint = document.getElementById('hint');
 const quitButton = document.getElementById('quit');
 const minimizeButton = document.getElementById('minimize');
 const closeButton = document.getElementById('close');
@@ -26,6 +27,12 @@ async function init() {
     if (current) input.value = current;
     const version = await window.yhspeak.getVersion();
     if (version) versionLabel.textContent = version;
+    const domain = await window.launcher.defaultDomain();
+    if (domain) {
+      hint.textContent =
+        `Можно ввести короткое имя — например «chat», и приложение подключится к chat.${domain}. ` +
+        'Для микрофона и демонстрации экрана нужен HTTPS.';
+    }
   } catch {
     /* preload unavailable */
   }

@@ -37,4 +37,5 @@ contextBridge.exposeInMainWorld('launcher', {
   connect: (url) => ipcRenderer.invoke('launcher:connect', url),
   quit: () => ipcRenderer.invoke('launcher:quit'),
   currentUrl: () => ipcRenderer.invoke('launcher:current-url'),
+  defaultDomain: () => ipcRenderer.invoke('launcher:default-domain'),
 });

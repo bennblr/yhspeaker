@@ -4,6 +4,7 @@ import {
   Check,
   CircleAlert,
   Copy,
+  Download,
   ExternalLink,
   Globe2,
   KeyRound,
@@ -574,6 +575,20 @@ export function PlatformApp() {
             </div>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
+            {meta?.desktop.available && (
+              <a
+                className="btn-ghost px-3 py-2 text-xs"
+                href="/download/windows"
+                download
+                title={`Скачать ${meta.desktop.fileName} · приложение для Windows`}
+              >
+                <Download className="h-4 w-4" />
+                Клиент
+                <span className="hidden sm:inline">
+                  · {Math.max(1, Math.round(meta.desktop.size / (1024 * 1024)))} МБ
+                </span>
+              </a>
+            )}
             <button
               type="button"
               className="icon-btn"

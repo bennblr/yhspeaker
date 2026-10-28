@@ -31,6 +31,11 @@ export interface PlatformMeta {
   maxParticipantsLimit: number;
   adminLogin: string;
   version: string;
+  desktop: {
+    available: boolean;
+    fileName: string | null;
+    size: number;
+  };
 }
 
 export interface PlatformOverview {

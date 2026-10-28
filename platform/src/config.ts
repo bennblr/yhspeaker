@@ -87,6 +87,7 @@ export interface PlatformConfig {
   tenantDomainSuffix: string;
   dataDir: string;
   webDistDir: string;
+  desktopInstallerDir: string;
   serverEntry: string;
   jwtSecret: string;
   secretKey: string;
@@ -147,6 +148,10 @@ export const config: PlatformConfig = {
   tenantDomainSuffix: resolveTenantDomainSuffix(),
   dataDir: path.resolve(rootDir, envString('PLATFORM_DATA_DIR', 'platform-data')),
   webDistDir: path.join(rootDir, 'web', 'dist'),
+  desktopInstallerDir: path.resolve(
+    rootDir,
+    envString('DESKTOP_INSTALLER_DIR', 'desktop/release'),
+  ),
   serverEntry: path.join(rootDir, 'server', 'dist', 'index.js'),
   jwtSecret,
   secretKey: resolveSecretKey(jwtSecret),
