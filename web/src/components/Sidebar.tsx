@@ -76,18 +76,45 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
 }
 
 function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speaking: Set<string> }) {
+  const roles = useApp((state) => state.roles);
+  const localMutedIds = useApp((state) => state.localMuted);
+
   return (
-    <div className="flex flex-wrap gap-1.5 px-2 pb-1.5 pt-0.5">
-      {users.map((user) => (
-        <span key={user.id} className="relative" title={`${user.displayName}${user.label ? ` (${user.label})` : ''}`}>
-          <Avatar id={user.id} name={user.displayName} size="xs" speaking={speaking.has(user.id)} />
-          {(user.muted || user.serverMuted) && (
-            <span className="absolute -bottom-0.5 -right-0.5 grid h-3.5 w-3.5 place-items-center rounded-full bg-panel text-danger">
-              <MicOff className="h-2.5 w-2.5" />
+    <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-0.5">
+      {users.map((user) => {
+        const primary = user.role === 'member' ? primaryRole(user, roles) : null;
+        const isSpeaking = speaking.has(user.id);
+        const localMuted = localMutedIds.includes(user.id);
+        return (
+          <span
+            key={user.id}
+            title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
+            className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-panel2/70 py-0.5 pl-0.5 pr-1.5 text-[11px] text-slate-300"
+          >
+            <Avatar id={user.id} name={user.displayName} size="xs" speaking={isSpeaking} />
+            <span
+              className={cn(
+                'max-w-[120px] truncate',
+                isSpeaking && 'text-ok',
+                localMuted && 'line-through opacity-60',
+              )}
+              style={!isSpeaking && primary ? { color: primary.color } : undefined}
+            >
+              {user.displayName}
             </span>
-          )}
-        </span>
-      ))}
+            <LabelBadge label={user.label} />
+            {localMuted && <VolumeX className="h-3 w-3 shrink-0 text-danger/80" />}
+            {user.broadcasting && <Radio className="h-3 w-3 shrink-0 text-ok" />}
+            {user.screenSharing && <MonitorUp className="h-3 w-3 shrink-0 text-accent" />}
+            {user.deafened && <HeadphoneOff className="h-3 w-3 shrink-0 text-danger/80" />}
+            {(user.muted || user.serverMuted) && (
+              <MicOff
+                className={cn('h-3 w-3 shrink-0', user.serverMuted ? 'text-danger' : 'text-muted')}
+              />
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Ban,
   HeadphoneOff,
@@ -10,19 +11,26 @@ import {
   Radio,
   Shield,
   ShieldCheck,
-  ShieldOff,
   Tag,
+  UserCheck,
   UserX,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
-import { hasPermission, type BroadcastGroup, type Channel, type OnlineUser } from '@tsds/shared';
+import {
+  hasPermission,
+  type BaseRole,
+  type BroadcastGroup,
+  type Channel,
+  type OnlineUser,
+  type Role,
+} from '@tsds/shared';
 import { Avatar } from './Avatar';
 import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
-import { primaryRole, roleLabel } from '../lib/roles';
+import { BASE_ROLE_META, primaryRole, roleLabel } from '../lib/roles';
 import {
   leaveVoice,
   joinVoice,
@@ -43,18 +51,50 @@ function VideoPreview({ stream, muted = true }: { stream: MediaStream; muted?: b
 
 function ModeratorMenu({
   user,
+  anchor,
   onClose,
 }: {
   user: OnlineUser;
+  anchor: HTMLElement | null;
   onClose: () => void;
 }) {
   const me = useApp((state) => state.me);
   const channels = useApp((state) => state.channels);
+  const roles = useApp((state) => state.roles);
   const socket = getSocket();
-  if (!socket || !me) return null;
+  const [selectedRoles, setSelectedRoles] = useState<string[]>(user.roleIds);
+
+  useEffect(() => {
+    setSelectedRoles(user.roleIds);
+  }, [user.roleIds]);
+
+  useEffect(() => {
+    const close = () => onClose();
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [onClose]);
+
+  if (!socket || !me || !anchor) return null;
+
+  const client = socket;
   const voiceChannels = channels.filter(
     (channel) => channel.type === 'voice' && channel.id !== user.channelId,
   );
+  const canAssignBaseRole = me.role === 'admin' && !user.isGuest;
+  const canPromoteGuest = me.role === 'moderator' && !user.isGuest && user.role === 'guest';
+  const canAuthorizeGuest =
+    user.isGuest && (me.role === 'admin' || me.role === 'moderator');
+  const canManageRoles = !user.isGuest && hasPermission(me, roles, 'roles');
+
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(272, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
+  const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 240));
+  const maxHeight = Math.max(180, window.innerHeight - top - 8);
 
   function run(
     emit: (callback: (result: { ok: boolean; error?: string }) => void) => void,
@@ -65,15 +105,52 @@ function ModeratorMenu({
     });
   }
 
-  return (
+  function toggleCustomRole(role: Role): void {
+    const next = selectedRoles.includes(role.id)
+      ? selectedRoles.filter((id) => id !== role.id)
+      : [...selectedRoles, role.id];
+    setSelectedRoles(next);
+    client.emit('mod:setUserRoles', { userId: user.id, roleIds: next }, (result) => {
+      if (result.ok) return;
+      setSelectedRoles(user.roleIds);
+      toast('error', result.error ?? 'Не удалось изменить роли');
+    });
+  }
+
+  function authorizeGuest(): void {
+    if (
+      !window.confirm(
+        `Назначить ${user.displayName} роль Пользователь? Аккаунт сохранится в «Аккаунтах».`,
+      )
+    ) {
+      return;
+    }
+    client.emit('mod:authorizeGuest', { userId: user.id }, (result) => {
+      onClose();
+      if (!result.ok) {
+        toast('error', result.error ?? 'Не удалось авторизовать гостя');
+        return;
+      }
+      toast('ok', 'Назначена роль Пользователь');
+      window.prompt(
+        'Гость стал пользователем. Логин и пароль:',
+        `Логин: ${result.username} · Пароль: ${result.password}`,
+      );
+    });
+  }
+
+  return createPortal(
     <>
       <button
         type="button"
-        className="fixed inset-0 z-20 cursor-default"
+        className="fixed inset-0 z-[60] cursor-default"
         onClick={onClose}
         aria-label="Закрыть меню"
       />
-      <div className="absolute right-2 top-9 z-30 w-60 animate-rise rounded-xl border border-line bg-[#0b0e15] p-1.5 text-left shadow-panel">
+      <div
+        className="fixed z-[70] animate-rise overflow-y-auto rounded-xl border border-line bg-[#0b0e15] p-1.5 text-left shadow-panel"
+        style={{ left, top, width, maxHeight }}
+      >
         <div className="flex items-center gap-2 px-2.5 py-2">
           <Avatar id={user.id} name={user.displayName} size="xs" />
           <span className="truncate text-xs font-semibold text-slate-200">
@@ -149,18 +226,78 @@ function ModeratorMenu({
             Выгнать из канала
           </button>
         )}
-        {!user.isGuest && user.role !== 'admin' && me.role === 'admin' && (
+        {canAssignBaseRole && (
+          <div className="mt-1 border-t border-line px-2.5 pb-1 pt-2">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
+              Базовая роль
+            </div>
+            <select
+              className="input h-8 py-0 text-xs"
+              value={user.role}
+              onChange={(event) => {
+                const role = event.target.value as BaseRole;
+                if (role === user.role) return;
+                run((callback) =>
+                  socket.emit('mod:setRole', { userId: user.id, role }, callback),
+                );
+              }}
+            >
+              {BASE_ROLE_META.map((meta) => (
+                <option key={meta.key} value={meta.key}>
+                  {meta.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {canAuthorizeGuest && (
+          <button
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
+            onClick={authorizeGuest}
+          >
+            <UserCheck className="h-3.5 w-3.5 text-ok" />
+            Сделать пользователем
+          </button>
+        )}
+        {canPromoteGuest && (
           <button
             className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
             onClick={() =>
               run((callback) =>
-                socket.emit('mod:setRole', { userId: user.id, role: 'admin' }, callback),
+                socket.emit('mod:setRole', { userId: user.id, role: 'member' }, callback),
               )
             }
           >
-            <Shield className="h-3.5 w-3.5 text-accent" />
-            Назначить администратором
+            <ShieldCheck className="h-3.5 w-3.5 text-ok" />
+            Назначить пользователем
           </button>
+        )}
+        {canManageRoles && roles.length > 0 && (
+          <div className="mt-1 border-t border-line px-2.5 pb-1 pt-2">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
+              Пользовательские роли
+            </div>
+            <div className="max-h-28 space-y-0.5 overflow-y-auto">
+              {roles.map((role) => (
+                <label
+                  key={role.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs text-slate-300 transition hover:bg-panel3"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 shrink-0 accent-accent"
+                    checked={selectedRoles.includes(role.id)}
+                    onChange={() => toggleCustomRole(role)}
+                  />
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: role.color }}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{role.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
         )}
         {!user.isGuest && user.role !== 'admin' && (
           <button
@@ -176,21 +313,9 @@ function ModeratorMenu({
             Забанить
           </button>
         )}
-        {!user.isGuest && user.role === 'admin' && me.role === 'admin' && (
-          <button
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-            onClick={() =>
-              run((callback) =>
-                socket.emit('mod:setRole', { userId: user.id, role: 'member' }, callback),
-              )
-            }
-          >
-            <ShieldOff className="h-3.5 w-3.5 text-warn" />
-            Снять администратора
-          </button>
-        )}
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -206,6 +331,7 @@ function ParticipantTile({
   canModerate: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const groups = useApp((state) => state.broadcastGroups);
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
@@ -233,13 +359,20 @@ function ParticipantTile({
       {showModMenu && (
         <div className="absolute right-1.5 top-1.5">
           <button
+            ref={menuButtonRef}
             className="icon-btn h-7 w-7 opacity-60 hover:opacity-100"
             onClick={() => setMenuOpen((value) => !value)}
             aria-label="Действия"
           >
             <MoreVertical className="h-4 w-4" />
           </button>
-          {menuOpen && <ModeratorMenu user={user} onClose={() => setMenuOpen(false)} />}
+          {menuOpen && (
+            <ModeratorMenu
+              user={user}
+              anchor={menuButtonRef.current}
+              onClose={() => setMenuOpen(false)}
+            />
+          )}
         </div>
       )}
 
