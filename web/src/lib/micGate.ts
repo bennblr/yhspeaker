@@ -1,3 +1,6 @@
+import { GtcrnWorkletNode, loadGtcrn } from '@sapphi-red/web-noise-suppressor';
+import gtcrnWorkletUrl from '@sapphi-red/web-noise-suppressor/gtcrnWorklet.js?url';
+import gtcrnWasmUrl from '@sapphi-red/web-noise-suppressor/gtcrn.wasm?url';
 import { sensitivityThreshold } from './settings';
 
 // Гейт работает в аудиопотоке, поэтому не зависит от троттлинга таймеров в фоне.
@@ -107,4 +110,63 @@ export function createNoiseFilter(ctx: AudioContext): BiquadFilterNode {
   filter.frequency.value = 120;
   filter.Q.value = 0.7;
   return filter;
+}
+
+// GTCRN — лёгкая нейросетевая модель шумоподавления: убирает не только ровный
+// фон, но и кашель, клавиатуру, посуду и прочие неречевые звуки.
+const SUPPORTED_RATES = [16_000, 48_000];
+let gtcrnBinary: Promise<ArrayBuffer> | null = null;
+
+function loadGtcrnBinary(): Promise<ArrayBuffer> {
+  if (!gtcrnBinary) {
+    gtcrnBinary = loadGtcrn({ url: gtcrnWasmUrl }).catch((error) => {
+      gtcrnBinary = null;
+      throw error;
+    });
+  }
+  return gtcrnBinary;
+}
+
+export interface NoiseSuppressorNode {
+  node: AudioWorkletNode;
+  destroy: () => void;
+}
+
+export async function createNoiseSuppressorNode(
+  ctx: AudioContext,
+): Promise<NoiseSuppressorNode | null> {
+  if (!SUPPORTED_RATES.includes(ctx.sampleRate)) return null;
+  try {
+    const [binary] = await Promise.all([loadGtcrnBinary(), ctx.audioWorklet.addModule(gtcrnWorkletUrl)]);
+    const node = new GtcrnWorkletNode(ctx, { maxChannels: 1, wasmBinary: binary });
+    return {
+      node,
+      destroy: () => {
+        try {
+          node.destroy();
+        } catch {
+          /* уже уничтожен */
+        }
+        try {
+          node.disconnect();
+        } catch {
+          /* уже отключён */
+        }
+      },
+    };
+  } catch (error) {
+    console.warn('[mic] neural suppression unavailable', error);
+    return null;
+  }
+}
+
+// Модель работает только с 16 или 48 кГц, поэтому микрофонный контекст
+// фиксируем на 48 кГц — это ещё и родная частота Opus.
+export function createMicAudioContext(): AudioContext {
+  const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+  try {
+    return new Ctx({ latencyHint: 'interactive', sampleRate: 48_000 }) as AudioContext;
+  } catch {
+    return new Ctx({ latencyHint: 'interactive' }) as AudioContext;
+  }
 }

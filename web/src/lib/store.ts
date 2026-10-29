@@ -8,7 +8,7 @@ import type {
   OnlineUser,
   Role,
 } from '@tsds/shared';
-import { loadSettings, saveSettings, type MicSettings } from './settings';
+import { loadSettings, saveSettings, MAX_USER_VOLUME, type MicSettings } from './settings';
 
 export type ToastType = 'ok' | 'error' | 'info';
 
@@ -53,6 +53,8 @@ export interface AppState {
   unread: Record<string, number>;
   speaking: string[];
   localMuted: string[];
+  // Индивидуальная громкость собеседников: множитель 0–2 к общему уровню.
+  userVolumes: Record<string, number>;
   settings: MicSettings;
   voice: VoiceState;
   toasts: Toast[];
@@ -74,6 +76,7 @@ export interface AppState {
   removeMessage: (channelId: string, messageId: string) => void;
   setSpeaking: (userIds: string[]) => void;
   toggleLocalMute: (userId: string) => void;
+  setUserVolume: (userId: string, volume: number) => void;
   setSettings: (patch: Partial<MicSettings>) => void;
   patchVoice: (patch: Partial<VoiceState>) => void;
   setLocalScreen: (stream: MediaStream | null) => void;
@@ -86,6 +89,7 @@ export interface AppState {
 
 const lastChannel = localStorage.getItem('la2speak.lastChannel');
 const LOCAL_MUTED_KEY = 'la2speak.localMuted';
+const USER_VOLUMES_KEY = 'la2speak.userVolumes';
 let toastSeq = 0;
 
 function loadLocalMuted(): string[] {
@@ -94,6 +98,22 @@ function loadLocalMuted(): string[] {
     return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+function loadUserVolumes(): Record<string, number> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(USER_VOLUMES_KEY) ?? '{}') as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const volumes: Record<string, number> = {};
+    for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+      const volume = Number(value);
+      if (!id || !Number.isFinite(volume) || volume === 1) continue;
+      volumes[id] = Math.max(0, Math.min(MAX_USER_VOLUME, volume));
+    }
+    return volumes;
+  } catch {
+    return {};
   }
 }
 
@@ -130,6 +150,7 @@ export const useApp = create<AppState>((set, get) => ({
   unread: {},
   speaking: [],
   localMuted: loadLocalMuted(),
+  userVolumes: loadUserVolumes(),
   settings: loadSettings(),
   voice: {
     channelId: null,
@@ -271,6 +292,21 @@ export const useApp = create<AppState>((set, get) => ({
       'info',
       active ? 'Звук участника снова включён' : 'Участник заглушён только у вас',
     );
+  },
+
+  setUserVolume: (userId, volume) => {
+    const value = Number.isFinite(volume)
+      ? Math.max(0, Math.min(MAX_USER_VOLUME, volume))
+      : 1;
+    const userVolumes = { ...get().userVolumes };
+    if (Math.abs(value - 1) < 0.005) delete userVolumes[userId];
+    else userVolumes[userId] = Math.round(value * 100) / 100;
+    try {
+      localStorage.setItem(USER_VOLUMES_KEY, JSON.stringify(userVolumes));
+    } catch {
+      /* storage unavailable */
+    }
+    set({ userVolumes });
   },
 
   setSettings: (patch) => {

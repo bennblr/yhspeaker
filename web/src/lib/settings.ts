@@ -1,5 +1,8 @@
 export type PttMode = 'open' | 'ptt' | 'toggle';
 
+// Предел индивидуальной громкости собеседника: 200% от обычного уровня.
+export const MAX_USER_VOLUME = 2;
+
 export interface BroadcastKeys {
   all: string;
   groups: Record<string, string>;

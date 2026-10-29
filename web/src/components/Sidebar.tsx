@@ -35,6 +35,7 @@ const DragContext = createContext<DragState | null>(null);
 function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolean }) {
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
+  const volume = useApp((state) => state.userVolumes[user.id] ?? 1);
   const primary = user.role === 'member' ? primaryRole(user, roles) : null;
   const drag = useContext(DragContext);
   const draggable = drag !== null && canDragUser(user);
@@ -82,6 +83,14 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
         />
       )}
       <span className="flex items-center gap-1">
+        {volume !== 1 && (
+          <span
+            className="text-[9px] font-semibold text-accent"
+            title={`Ваша громкость: ${Math.round(volume * 100)}%`}
+          >
+            {Math.round(volume * 100)}%
+          </span>
+        )}
         {localMuted && (
           <span title="Вы заглушили этого участника">
             <VolumeX className="h-3 w-3 text-danger/80" />
@@ -101,6 +110,7 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
 function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speaking: Set<string> }) {
   const roles = useApp((state) => state.roles);
   const localMutedIds = useApp((state) => state.localMuted);
+  const userVolumes = useApp((state) => state.userVolumes);
   const drag = useContext(DragContext);
 
   return (
@@ -109,6 +119,7 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
         const primary = user.role === 'member' ? primaryRole(user, roles) : null;
         const isSpeaking = speaking.has(user.sessionId);
         const localMuted = localMutedIds.includes(user.id);
+        const volume = userVolumes[user.id] ?? 1;
         const draggable = drag !== null && canDragUser(user);
         const dragging = drag?.user?.sessionId === user.sessionId;
         return (
@@ -137,6 +148,14 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
             </span>
             <LabelBadge label={user.label} />
             <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
+            {volume !== 1 && (
+              <span
+                className="shrink-0 text-[9px] font-semibold text-accent"
+                title={`Ваша громкость: ${Math.round(volume * 100)}%`}
+              >
+                {Math.round(volume * 100)}%
+              </span>
+            )}
             {localMuted && <VolumeX className="h-3 w-3 shrink-0 text-danger/80" />}
             {user.broadcasting && <Radio className="h-3 w-3 shrink-0 text-ok" />}
             {user.screenSharing && <MonitorUp className="h-3 w-3 shrink-0 text-accent" />}

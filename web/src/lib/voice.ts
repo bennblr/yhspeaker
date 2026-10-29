@@ -2,8 +2,16 @@ import { Device, type types as MT } from 'mediasoup-client';
 import type { ConsumerParams, TransportParams } from '@tsds/shared';
 import type { AppSocket } from './socket';
 import { useApp } from './store';
-import { DEFAULT_SETTINGS, type MicSettings } from './settings';
-import { applyMicGate, applyRemoteLevel, createMicGateNode, createNoiseFilter } from './micGate';
+import { DEFAULT_SETTINGS, MAX_USER_VOLUME, type MicSettings } from './settings';
+import {
+  applyMicGate,
+  applyRemoteLevel,
+  createMicAudioContext,
+  createMicGateNode,
+  createNoiseFilter,
+  createNoiseSuppressorNode,
+  type NoiseSuppressorNode,
+} from './micGate';
 
 interface ConsumerEntry {
   consumer: MT.Consumer;
@@ -54,9 +62,16 @@ export class VoiceEngine {
   private audioCtx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private gateNode: AudioWorkletNode | null = null;
+  private suppressor: NoiseSuppressorNode | null = null;
+  private playbackCtx: AudioContext | null = null;
   private localScreenStream: MediaStream | null = null;
   private readonly consumers = new Map<string, ConsumerEntry>();
   private readonly audioElements = new Map<string, HTMLAudioElement>();
+  private readonly playbackNodes = new Map<
+    string,
+    { source: MediaElementAudioSourceNode; gain: GainNode }
+  >();
+  private readonly userVolumes = new Map<string, number>();
   private readonly screenStreams = new Map<string, MediaStream>();
   private wantMic = false;
   private muted = false;
@@ -271,8 +286,7 @@ export class VoiceEngine {
       video: false,
     });
 
-    const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-    const ctx: AudioContext = new Ctx({ latencyHint: 'interactive' });
+    const ctx: AudioContext = createMicAudioContext();
     const source = ctx.createMediaStreamSource(raw);
     const gain = ctx.createGain();
     gain.gain.value = settings.inputGain;
@@ -285,6 +299,12 @@ export class VoiceEngine {
       const filter = createNoiseFilter(ctx);
       source.connect(filter);
       head = filter;
+      const suppressor = await createNoiseSuppressorNode(ctx);
+      if (suppressor) {
+        head.connect(suppressor.node);
+        head = suppressor.node;
+      }
+      this.suppressor = suppressor;
     }
     if (gate) {
       head.connect(gate);
@@ -317,6 +337,8 @@ export class VoiceEngine {
     this.gainNode = null;
     this.gateNode?.disconnect();
     this.gateNode = null;
+    this.suppressor?.destroy();
+    this.suppressor = null;
     if (this.audioCtx) {
       void this.audioCtx.close().catch(() => undefined);
       this.audioCtx = null;
@@ -418,6 +440,7 @@ export class VoiceEngine {
       const entry = this.consumers.get(id);
       element.muted = deafened || (entry ? this.localMuted.has(entry.userId) : false);
     }
+    this.applyPlaybackLevels();
     if (this.currentChannelId) {
       this.socket?.emit('voice:setDeafened', { deafened });
     }
@@ -432,6 +455,17 @@ export class VoiceEngine {
       if (!entry) continue;
       element.muted = this.deafened || this.localMuted.has(entry.userId);
     }
+    this.applyPlaybackLevels();
+  }
+
+  setUserVolumes(volumes: Record<string, number>): void {
+    this.userVolumes.clear();
+    for (const [userId, raw] of Object.entries(volumes)) {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value === 1) continue;
+      this.userVolumes.set(userId, Math.max(0, Math.min(MAX_USER_VOLUME, value)));
+    }
+    this.applyPlaybackLevels();
   }
 
   setPtt(active: boolean): void {
@@ -473,7 +507,7 @@ export class VoiceEngine {
 
     if (this.gainNode) this.gainNode.gain.value = settings.inputGain;
     this.applyGateSettings(settings);
-    this.applyOutputVolume(settings);
+    this.applyOutputVolume();
     void this.applyOutputDevice(settings);
 
     if (!this.currentChannelId) return;
@@ -499,14 +533,88 @@ export class VoiceEngine {
     this.applyMicGate();
   }
 
-  private applyOutputVolume(settings: MicSettings): void {
-    for (const element of this.audioElements.values()) {
-      element.volume = Math.max(0, Math.min(1, settings.outputVolume));
+  private applyOutputVolume(): void {
+    this.applyPlaybackLevels();
+  }
+
+  private userGain(userId: string): number {
+    const master = Math.max(0, Math.min(1, this.mySettings().outputVolume));
+    return master * (this.userVolumes.get(userId) ?? 1);
+  }
+
+  private isAudible(userId: string): boolean {
+    return !this.deafened && !this.localMuted.has(userId);
+  }
+
+  // Громкость каждого собеседника проходит через свой GainNode: так её можно
+  // поднять выше 100%, чего не позволяет HTMLMediaElement.volume.
+  private applyPlaybackLevels(): void {
+    for (const [consumerId, nodes] of this.playbackNodes) {
+      const entry = this.consumers.get(consumerId);
+      if (!entry) continue;
+      nodes.gain.gain.value = this.isAudible(entry.userId) ? this.userGain(entry.userId) : 0;
+    }
+    for (const [consumerId, element] of this.audioElements) {
+      if (this.playbackNodes.has(consumerId)) continue;
+      const entry = this.consumers.get(consumerId);
+      if (!entry) continue;
+      element.volume = Math.max(0, Math.min(1, this.userGain(entry.userId)));
+    }
+  }
+
+  private ensurePlaybackCtx(): AudioContext | null {
+    if (this.playbackCtx && this.playbackCtx.state !== 'closed') return this.playbackCtx;
+    try {
+      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+      this.playbackCtx = new Ctx({ latencyHint: 'interactive' }) as AudioContext;
+    } catch (error) {
+      console.warn('[voice] playback audio context unavailable', error);
+      this.playbackCtx = null;
+    }
+    return this.playbackCtx;
+  }
+
+  private routePlayback(
+    consumerId: string,
+    element: HTMLAudioElement,
+    userId: string,
+  ): boolean {
+    const ctx = this.ensurePlaybackCtx();
+    if (!ctx) return false;
+    try {
+      const source = ctx.createMediaElementSource(element);
+      const gain = ctx.createGain();
+      gain.gain.value = this.isAudible(userId) ? this.userGain(userId) : 0;
+      source.connect(gain).connect(ctx.destination);
+      this.playbackNodes.set(consumerId, { source, gain });
+      if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
+      return true;
+    } catch (error) {
+      console.warn('[voice] per-user volume unavailable', error);
+      return false;
+    }
+  }
+
+  private disconnectPlayback(consumerId: string): void {
+    const nodes = this.playbackNodes.get(consumerId);
+    if (!nodes) return;
+    this.playbackNodes.delete(consumerId);
+    try {
+      nodes.source.disconnect();
+      nodes.gain.disconnect();
+    } catch {
+      /* already disconnected */
     }
   }
 
   private async applyOutputDevice(settings: MicSettings): Promise<void> {
     const sinkId = settings.outputDeviceId === 'default' ? '' : settings.outputDeviceId;
+    const ctx = this.playbackCtx as
+      | (AudioContext & { sinkId?: string; setSinkId?: (id: string) => Promise<void> })
+      | null;
+    if (ctx?.setSinkId && ctx.sinkId !== sinkId) {
+      await ctx.setSinkId(sinkId).catch(() => undefined);
+    }
     for (const element of this.audioElements.values()) {
       const withSink = element as HTMLAudioElement & {
         sinkId?: string;
@@ -620,10 +728,11 @@ export class VoiceEngine {
         element.srcObject = stream;
         element.autoplay = true;
         element.setAttribute('playsinline', '');
-        element.volume = Math.max(0, Math.min(1, this.mySettings().outputVolume));
-        element.muted = this.deafened || this.localMuted.has(params.userId);
+        element.muted = !this.isAudible(params.userId);
         element.setAttribute('data-la2speak-audio', params.sessionId);
         document.body.appendChild(element);
+        const routed = this.routePlayback(consumer.id, element, params.userId);
+        element.volume = routed ? 1 : Math.max(0, Math.min(1, this.userGain(params.userId)));
         void element.play().catch(() => undefined);
         this.audioElements.set(consumer.id, element);
         void this.applyOutputDevice(this.mySettings());
@@ -660,6 +769,7 @@ export class VoiceEngine {
       element.remove();
       this.audioElements.delete(consumerId);
     }
+    this.disconnectPlayback(consumerId);
     if (entry.kind === 'video') {
       const stream = this.screenStreams.get(entry.sessionId);
       if (stream) {
@@ -815,6 +925,11 @@ export class VoiceEngine {
   reset(): void {
     this.generation += 1;
     this.cleanupCall(true);
+    for (const consumerId of [...this.playbackNodes.keys()]) this.disconnectPlayback(consumerId);
+    if (this.playbackCtx) {
+      void this.playbackCtx.close().catch(() => undefined);
+      this.playbackCtx = null;
+    }
     this.device = null;
     this.socket = null;
     patchVoice({
@@ -829,6 +944,9 @@ export class VoiceEngine {
   }
 
   unlockAudio(): void {
+    if (this.playbackCtx?.state === 'suspended') {
+      void this.playbackCtx.resume().catch(() => undefined);
+    }
     for (const element of this.audioElements.values()) {
       void element.play().catch(() => undefined);
     }
@@ -840,5 +958,7 @@ export const voice = new VoiceEngine();
 
 useApp.subscribe((state, previous) => {
   if (state.localMuted !== previous.localMuted) voice.setLocalMuted(state.localMuted);
+  if (state.userVolumes !== previous.userVolumes) voice.setUserVolumes(state.userVolumes);
 });
 voice.setLocalMuted(useApp.getState().localMuted);
+voice.setUserVolumes(useApp.getState().userVolumes);

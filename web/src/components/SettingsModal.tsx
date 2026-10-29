@@ -32,7 +32,14 @@ import {
   micLevelPercent,
   sensitivityThreshold,
 } from '../lib/settings';
-import { applyMicGate, createMicGateNode, createNoiseFilter } from '../lib/micGate';
+import {
+  applyMicGate,
+  createMicAudioContext,
+  createMicGateNode,
+  createNoiseFilter,
+  createNoiseSuppressorNode,
+  type NoiseSuppressorNode,
+} from '../lib/micGate';
 import { useCan } from '../lib/roles';
 import { desktop } from '../lib/desktop';
 import {
@@ -259,6 +266,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     noiseSuppression?: boolean;
     echoCancellation?: boolean;
   } | null>(null);
+  const [neuralSuppression, setNeuralSuppression] = useState<boolean | null>(null);
   const [monitor, setMonitor] = useState(false);
   const [testRetry, setTestRetry] = useState(0);
   const [nickname, setNickname] = useState('');
@@ -271,6 +279,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const testStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const testGateRef = useRef<AudioWorkletNode | null>(null);
+  const testSuppressorRef = useRef<NoiseSuppressorNode | null>(null);
   const testGainRef = useRef<GainNode | null>(null);
   const rafRef = useRef<number | null>(null);
   const monitorRef = useRef<HTMLAudioElement>(null);
@@ -303,15 +312,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           testStreamRef.current?.getTracks().forEach((track) => track.stop());
           testStreamRef.current = stream;
 
-          const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-          const ctx: AudioContext = new Ctx();
+          const ctx: AudioContext = createMicAudioContext();
           const source = ctx.createMediaStreamSource(stream);
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 1024;
           source.connect(analyser);
 
           const gate = await createMicGateNode(ctx);
+          const suppressor = settings.noiseSuppression
+            ? await createNoiseSuppressorNode(ctx)
+            : null;
           if (cancelled) {
+            suppressor?.destroy();
             stream.getTracks().forEach((track) => track.stop());
             void ctx.close().catch(() => undefined);
             return;
@@ -325,6 +337,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             const filter = createNoiseFilter(ctx);
             source.connect(filter);
             head = filter;
+            if (suppressor) {
+              head.connect(suppressor.node);
+              head = suppressor.node;
+            }
           }
           if (gate) {
             head.connect(gate);
@@ -337,7 +353,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
           audioCtxRef.current = ctx;
           testGateRef.current = gate;
+          testSuppressorRef.current = suppressor;
           testGainRef.current = gain;
+          setNeuralSuppression(settings.noiseSuppression ? Boolean(suppressor) : null);
           if (ctx.state === 'suspended') await ctx.resume().catch(() => undefined);
 
           const trackSettings = (stream.getAudioTracks()[0]?.getSettings() ?? {}) as MediaTrackSettings & {
@@ -398,6 +416,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       testStreamRef.current?.getTracks().forEach((track) => track.stop());
       testStreamRef.current = null;
       testGateRef.current = null;
+      testSuppressorRef.current?.destroy();
+      testSuppressorRef.current = null;
       testGainRef.current = null;
       void audioCtxRef.current?.close().catch(() => undefined);
       audioCtxRef.current = null;
@@ -405,6 +425,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setLevel(0);
       setTestError(null);
       setProcessing(null);
+      setNeuralSuppression(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -815,7 +836,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 checked={settings.noiseSuppression}
                 onChange={(value) => updateSettings({ noiseSuppression: value })}
                 title="Шумоподавление"
-                description="Подавляет фоновый шум вентилятора, клавиатуры и улицы."
+                description="Нейросетевая модель (GTCRN) убирает кашель, клавиатуру, вентилятор и улицу."
               />
               <Toggle
                 checked={settings.autoGainControl}
@@ -926,6 +947,21 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   {processing.noiseSuppression
                     ? 'Браузер применяет шумоподавление к этому микрофону. «Слышать себя» идёт через него же.'
                     : 'Браузер не применил шумоподавление к этому микрофону: остаются фильтр низких частот и порог чувствительности.'}
+                </p>
+              )}
+
+              {settings.noiseSuppression && neuralSuppression !== null && (
+                <p
+                  className={cn(
+                    'mt-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed',
+                    neuralSuppression
+                      ? 'border-ok/20 bg-ok/5 text-ok'
+                      : 'border-warn/20 bg-warn/5 text-warn',
+                  )}
+                >
+                  {neuralSuppression
+                    ? 'Нейросетевое шумоподавление активно: кашель и посторонние звуки не передаются.'
+                    : 'Нейросетевое шумоподавление недоступно в этом браузере — работают фильтр и порог.'}
                 </p>
               )}
 
