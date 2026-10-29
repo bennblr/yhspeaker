@@ -428,9 +428,6 @@ function ParticipantTile({
           )}
           {roleLabel(user, roles)}
         </div>
-        <div className="mt-1 flex justify-center">
-          <DeviceBadge device={user.device} deviceName={user.deviceName} />
-        </div>
       </div>
 
       <div className="flex items-center gap-1.5 text-muted">
@@ -653,7 +650,6 @@ export function VoiceStage({ channel }: { channel: Channel }) {
                 >
                   <Avatar id={user.id} name={user.displayName} size="xs" />
                   <span className="text-xs text-slate-300">{user.displayName}</span>
-                  <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
                 </div>
               ))}
             </div>

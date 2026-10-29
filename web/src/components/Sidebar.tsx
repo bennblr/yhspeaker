@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 import { Avatar } from './Avatar';
-import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
 import { VolumeMenu } from './VolumeMenu';
@@ -82,7 +81,6 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
           <SlidersHorizontal className="h-3 w-3" />
         </button>
       )}
-      <DeviceBadge device={user.device} deviceName={user.deviceName} />
       <LabelBadge label={user.label} />
       {user.role === 'admin' && (
         <span title="Администратор" className="shrink-0">
@@ -183,7 +181,6 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
               </button>
             )}
             <LabelBadge label={user.label} />
-            <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
             {volume !== 1 && (
               <span
                 className="shrink-0 text-[9px] font-semibold text-accent"
