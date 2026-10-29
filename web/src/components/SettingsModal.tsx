@@ -25,8 +25,8 @@ import { useApp } from '../lib/store';
 import { updateSettings, toast } from '../lib/actions';
 import { api } from '../lib/api';
 import {
-  PTT_OPTIONS,
   acceleratorFromEvent,
+  acceleratorFromPointer,
   formatAccelerator,
   isGlobalAccelerator,
   micLevelPercent,
@@ -116,10 +116,14 @@ function HotkeyRecorder({
   value,
   onChange,
   warning,
+  allowMouse = false,
+  allowClear = true,
 }: {
   value: string;
   onChange: (value: string) => void;
   warning: string | null;
+  allowMouse?: boolean;
+  allowClear?: boolean;
 }) {
   const [recording, setRecording] = useState(false);
   const [recordingHint, setRecordingHint] = useState<string | null>(null);
@@ -171,20 +175,33 @@ function HotkeyRecorder({
       setRecording(false);
       setRecordingHint(null);
     };
-    const outside = (event: PointerEvent) => {
-      if (!buttonRef.current?.contains(event.target as Node)) cancel();
+    const pointer = (event: PointerEvent) => {
+      const inside =
+        event.target instanceof Node && Boolean(buttonRef.current?.contains(event.target));
+      if (allowMouse) {
+        const accelerator = acceleratorFromPointer(event);
+        if (accelerator) {
+          event.preventDefault();
+          event.stopPropagation();
+          onChangeRef.current(accelerator);
+          setRecording(false);
+          setRecordingHint(null);
+          return;
+        }
+      }
+      if (!inside) cancel();
     };
     window.addEventListener('keydown', down, true);
     window.addEventListener('keyup', up, true);
-    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('pointerdown', pointer, true);
     window.addEventListener('blur', cancel);
     return () => {
       window.removeEventListener('keydown', down, true);
       window.removeEventListener('keyup', up, true);
-      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('pointerdown', pointer, true);
       window.removeEventListener('blur', cancel);
     };
-  }, [recording]);
+  }, [recording, allowMouse]);
 
   return (
     <div>
@@ -202,13 +219,13 @@ function HotkeyRecorder({
           )}
         >
           <span className={cn('truncate', !recording && !value && 'text-muted')}>
-            {recording ? 'Нажмите клавишу или сочетание…' : formatAccelerator(value)}
+            {recording ? 'Нажмите клавишу, сочетание или кнопку мыши…' : formatAccelerator(value)}
           </span>
           <Keyboard
             className={cn('h-4 w-4 shrink-0', recording ? 'text-accent' : 'text-muted')}
           />
         </button>
-        {value && (
+        {allowClear && value && (
           <button
             type="button"
             className="btn-ghost h-[42px] px-2.5"
@@ -224,7 +241,11 @@ function HotkeyRecorder({
         )}
       </div>
       {recording && (
-        <p className="mt-1 text-[11px] text-accent">Нажмите нужную клавишу. Esc — отмена.</p>
+        <p className="mt-1 text-[11px] text-accent">
+          {allowMouse
+            ? 'Нажмите клавишу, сочетание или среднюю/боковую кнопку мыши. Esc — отмена.'
+            : 'Нажмите нужную клавишу. Esc — отмена.'}
+        </p>
       )}
       {recordingHint && <p className="mt-1 text-[11px] text-warn">{recordingHint}</p>}
       {warning && <p className="mt-1 text-[11px] text-warn">{warning}</p>}
@@ -538,18 +559,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     }
   }
 
-  const pttOptions = PTT_OPTIONS;
   const keyAction =
     settings.mode === 'ptt'
-      ? 'Клавишу нужно удерживать — передача идёт, пока она нажата.'
+      ? 'Кнопку нужно удерживать — передача идёт, пока она нажата.'
       : settings.mode === 'toggle'
         ? 'Нажатие включает микрофон, повторное нажатие выключает.'
-        : 'Клавиша не используется: микрофон передаёт постоянно.';
+        : 'Кнопка не используется: микрофон передаёт постоянно.';
   const globalHint = desktop
-    ? isGlobalAccelerator(settings.pttKey)
-      ? 'Сочетание работает глобально — даже когда окно свёрнуто или активно другое приложение.'
-      : 'Одиночная клавиша работает только при активном окне. Выберите сочетание (например Alt + V) или F8, чтобы клавиша работала в свёрнутом приложении.'
-    : 'В браузере клавиша работает, когда вкладка активна. В приложении для Windows клавиша работает глобально.';
+    ? 'В приложении для Windows клавиша или кнопка мыши срабатывают глобально — даже когда окно свёрнуто или запущена игра. Зажатые в игре Shift или Ctrl не мешают.'
+    : 'В браузере клавиша работает, когда вкладка активна. Глобально клавиша и кнопки мыши работают в приложении для Windows.';
   const keyHint = `${keyAction} ${globalHint}`;
 
   const threshold = sensitivityThreshold(settings.micSensitivity);
@@ -966,23 +984,22 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         <Section icon={Keyboard} title="Клавиша микрофона">
           <div className="space-y-3">
             <div>
-              <label className="label">Клавиша</label>
-              <div className="relative">
-                <select
-                  className="input appearance-none pr-9"
-                  value={settings.pttKey}
-                  onChange={(event) => updateSettings({ pttKey: event.target.value })}
-                >
-                  {pttOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label} — {option.hint}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-              </div>
+              <label className="label">Клавиша или кнопка мыши</label>
+              <HotkeyRecorder
+                value={settings.pttKey}
+                onChange={(value) => updateSettings({ pttKey: value })}
+                warning={null}
+                allowMouse
+                allowClear={false}
+              />
             </div>
             <p className="text-[11px] leading-relaxed text-muted">{keyHint}</p>
+            {desktop && settings.mode !== 'open' && (
+              <p className="text-[11px] leading-relaxed text-muted">
+                Если игра запущена от имени администратора, запустите LA2Speak тоже от
+                администратора: Windows не передаёт нажатия между окнами с разными правами.
+              </p>
+            )}
             {desktop && (
               <p className="text-[11px] leading-relaxed text-muted">
                 Состояние микрофона видно на иконке в системном трее: серая — не в канале,
@@ -992,8 +1009,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             )}
             {settings.mode === 'open' && (
               <p className="rounded-lg border border-warn/20 bg-warn/5 px-3 py-2 text-[11px] text-warn">
-                Сейчас включён открытый микрофон. Выберите режим «Push-to-talk» или «По кнопке»
-                выше, чтобы управлять микрофоном клавишей.
+                Сейчас включён открытый микрофон: он передаёт всё время, в том числе при
+                вещании во все каналы. Выберите режим «Push-to-talk» выше, чтобы вас слышали
+                только пока удерживается кнопка.
               </p>
             )}
           </div>
@@ -1040,7 +1058,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               )}
               <p className="text-[11px] leading-relaxed text-muted">
                 Клавиша переключает цель: повторное нажатие выключает её. Клавиша Push-to-talk
-                не может быть назначена вещанию.
+                не может быть назначена вещанию. В режиме «Push-to-talk» вещание во все каналы
+                идёт только пока удерживается кнопка микрофона.
               </p>
             </div>
           </Section>

@@ -22,14 +22,16 @@ export interface MicSettings {
   broadcastKeys: BroadcastKeys;
 }
 
-export const PTT_OPTIONS = [
-  { value: 'V', label: 'V', hint: 'когда окно активно' },
-  { value: 'B', label: 'B', hint: 'когда окно активно' },
-  { value: 'Space', label: 'Пробел', hint: 'когда окно активно' },
-  { value: 'Alt+V', label: 'Alt + V', hint: 'глобально в приложении' },
-  { value: 'Control+Space', label: 'Ctrl + Space', hint: 'глобально в приложении' },
-  { value: 'F8', label: 'F8', hint: 'глобально в приложении' },
-];
+// Кнопки мыши, которые можно назначить на микрофон. Средняя и две боковые:
+// левая и правая заняты обычными действиями в приложении и играх.
+// Значение — event.button в браузере (см. POINTER_BUTTONS).
+const MOUSE_TOKENS = new Set(['Mouse3', 'Mouse4', 'Mouse5']);
+
+const POINTER_BUTTONS: Record<number, string> = {
+  1: 'Mouse3',
+  3: 'Mouse4',
+  4: 'Mouse5',
+};
 
 const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'] as const;
 const MODIFIER_CODES = new Set([
@@ -109,6 +111,9 @@ const KEY_LABELS: Record<string, string> = {
   ArrowDown: '↓',
   ArrowLeft: '←',
   ArrowRight: '→',
+  Mouse3: 'Средняя кнопка мыши',
+  Mouse4: 'Боковая кнопка мыши (назад)',
+  Mouse5: 'Боковая кнопка мыши (вперёд)',
 };
 
 const MODIFIER_LABELS: Record<string, string> = {
@@ -125,16 +130,38 @@ function isKeyToken(token: string): boolean {
   return NAMED_KEYS.has(token);
 }
 
+function isMouseToken(token: string): boolean {
+  return MOUSE_TOKENS.has(token);
+}
+
 export function isValidAccelerator(accelerator: string): boolean {
   if (!accelerator) return false;
   const parts = accelerator.split('+');
   const key = parts.pop() ?? '';
-  if (!isKeyToken(key)) return false;
+  if (!isKeyToken(key) && !isMouseToken(key)) return false;
   const seen = new Set<string>();
   for (const part of parts) {
     if (!(MODIFIERS as readonly string[]).includes(part) || seen.has(part)) return false;
     seen.add(part);
   }
+  return true;
+}
+
+export function isMouseAccelerator(accelerator: string): boolean {
+  const key = accelerator.split('+').pop() ?? '';
+  return isMouseToken(key);
+}
+
+// В браузере дополнительные зажатые модификаторы не мешают срабатыванию:
+// в игре легко держать Shift или Ctrl и при этом нажимать клавишу микрофона.
+function modifiersMatch(
+  event: { altKey: boolean; ctrlKey: boolean; shiftKey: boolean; metaKey: boolean },
+  parts: string[],
+): boolean {
+  if (parts.includes('Alt') && !event.altKey) return false;
+  if (parts.includes('Control') && !event.ctrlKey) return false;
+  if (parts.includes('Shift') && !event.shiftKey) return false;
+  if (parts.includes('Meta') && !event.metaKey) return false;
   return true;
 }
 
@@ -165,6 +192,29 @@ export function acceleratorFromEvent(event: KeyboardEvent): string | null {
   if (event.metaKey) parts.push('Meta');
   parts.push(token);
   return parts.join('+');
+}
+
+export function acceleratorFromPointer(event: PointerEvent): string | null {
+  const token = POINTER_BUTTONS[event.button];
+  if (!token) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('Control');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+  if (event.metaKey) parts.push('Meta');
+  parts.push(token);
+  return parts.join('+');
+}
+
+export function matchesPointerKey(
+  event: { button: number; altKey: boolean; ctrlKey: boolean; shiftKey: boolean; metaKey: boolean },
+  accelerator: string,
+): boolean {
+  if (!isValidAccelerator(accelerator)) return false;
+  const parts = accelerator.split('+');
+  const key = parts.pop() ?? '';
+  if (POINTER_BUTTONS[event.button] !== key) return false;
+  return modifiersMatch(event, parts);
 }
 
 export function formatAccelerator(accelerator: string): string {
@@ -228,8 +278,8 @@ export function loadSettings(): MicSettings {
       outputVolume: clamp(Number(parsed.outputVolume ?? 1), 0, 1),
       mode:
         parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'open',
-      pttKey: PTT_OPTIONS.some((option) => option.value === parsed.pttKey)
-        ? (parsed.pttKey as string)
+      pttKey: typeof parsed.pttKey === 'string' && isValidAccelerator(parsed.pttKey)
+        ? parsed.pttKey
         : DEFAULT_SETTINGS.pttKey,
       broadcastKeys: normalizeBroadcastKeys(parsed.broadcastKeys),
     };
@@ -251,6 +301,7 @@ export function saveSettings(settings: MicSettings): void {
 // обрабатываются только при активном окне, чтобы не срабатывать при вводе текста.
 export function isGlobalAccelerator(accelerator: string): boolean {
   if (!accelerator) return false;
+  if (isMouseAccelerator(accelerator)) return true;
   if (accelerator.includes('+')) return true;
   const token = accelerator.split('+').pop() ?? '';
   return /^F([1-9]|1[0-9]|2[0-4])$/.test(token) || GLOBAL_SINGLE_KEYS.has(token);
@@ -270,25 +321,14 @@ export function matchesPttKey(event: KeyboardEvent, accelerator: string): boolea
   if (!isValidAccelerator(accelerator)) return false;
   const parts = accelerator.split('+');
   const key = parts.pop() ?? '';
-  const needAlt = parts.includes('Alt');
-  const needCtrl = parts.includes('Control') || parts.includes('CommandOrControl');
-  const needShift = parts.includes('Shift');
-  const needMeta = parts.includes('Meta');
-
-  if (event.altKey !== needAlt) return false;
-  if (event.ctrlKey !== needCtrl) return false;
-  if (event.shiftKey !== needShift) return false;
-  if (event.metaKey !== needMeta) return false;
-
+  if (isMouseToken(key)) return false;
+  if (!modifiersMatch(event, parts)) return false;
   return tokenMatchesCode(key, event.code);
 }
 
 export function matchesPttRelease(event: KeyboardEvent, accelerator: string): boolean {
   if (!isValidAccelerator(accelerator)) return false;
   const key = accelerator.split('+').pop() ?? '';
+  if (isMouseToken(key)) return false;
   return tokenMatchesCode(key, event.code);
-}
-
-export function describePttKey(accelerator: string): string {
-  return PTT_OPTIONS.find((option) => option.value === accelerator)?.label ?? accelerator;
 }

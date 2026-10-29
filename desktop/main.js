@@ -358,20 +358,26 @@ function createTray() {
   updateTray();
 }
 
+const MOUSE_TOKENS = { Mouse3: 3, Mouse4: 4, Mouse5: 5 };
+
 function parseAccelerator(accelerator) {
-  if (!accelerator || !uiohookKeys) return null;
+  if (!accelerator) return null;
   const parts = String(accelerator).split('+');
   const key = parts.pop();
   if (!key) return null;
-  const keycode = uiohookKeys[key];
-  if (typeof keycode !== 'number') return null;
-  return {
-    keycode,
+  const modifiers = {
     alt: parts.includes('Alt'),
     ctrl: parts.includes('Control') || parts.includes('CommandOrControl'),
     shift: parts.includes('Shift'),
     meta: parts.includes('Meta'),
   };
+  if (Object.prototype.hasOwnProperty.call(MOUSE_TOKENS, key)) {
+    return { mouse: MOUSE_TOKENS[key], ...modifiers };
+  }
+  if (!uiohookKeys) return null;
+  const keycode = uiohookKeys[key];
+  if (typeof keycode !== 'number') return null;
+  return { keycode, ...modifiers };
 }
 
 function setAccelerator(accelerator) {
@@ -404,13 +410,24 @@ function updateModifier(event, down) {
 
 // libuiohook не всегда выставляет модификаторы в событии (особенно при
 // синтетическом вводе), поэтому дополнительно отслеживаем нажатые клавиши.
+// Лишние зажатые модификаторы не мешают: в игре можно держать Shift или Ctrl.
 function eventMatches(event, match) {
-  if (!match) return false;
+  if (!match || match.keycode === undefined) return false;
   if (event.keycode !== match.keycode) return false;
-  if ((Boolean(event.altKey) || modifierHeld('alt')) !== match.alt) return false;
-  if ((Boolean(event.ctrlKey) || modifierHeld('ctrl')) !== match.ctrl) return false;
-  if ((Boolean(event.shiftKey) || modifierHeld('shift')) !== match.shift) return false;
-  if ((Boolean(event.metaKey) || modifierHeld('meta')) !== match.meta) return false;
+  if (match.alt && !(event.altKey || modifierHeld('alt'))) return false;
+  if (match.ctrl && !(event.ctrlKey || modifierHeld('ctrl'))) return false;
+  if (match.shift && !(event.shiftKey || modifierHeld('shift'))) return false;
+  if (match.meta && !(event.metaKey || modifierHeld('meta'))) return false;
+  return true;
+}
+
+function mouseMatches(event, match) {
+  if (!match || match.mouse === undefined) return false;
+  if (event.button !== match.mouse) return false;
+  if (match.alt && !(event.altKey || modifierHeld('alt'))) return false;
+  if (match.ctrl && !(event.ctrlKey || modifierHeld('ctrl'))) return false;
+  if (match.shift && !(event.shiftKey || modifierHeld('shift'))) return false;
+  if (match.meta && !(event.metaKey || modifierHeld('meta'))) return false;
   return true;
 }
 
@@ -440,6 +457,7 @@ function startKeyboardHook() {
       updateModifier(event, true);
 
       for (const binding of broadcastBindings) {
+        if (binding.mouse !== undefined) continue;
         if (!eventMatches(event, binding)) continue;
         if (broadcastHeld.has(binding.target)) return;
         broadcastHeld.add(binding.target);
@@ -461,11 +479,47 @@ function startKeyboardHook() {
 
     hook.on('keyup', (event) => {
       for (const binding of broadcastBindings) {
+        if (binding.mouse !== undefined) continue;
         if (event.keycode === binding.keycode) broadcastHeld.delete(binding.target);
       }
       updateModifier(event, false);
 
-      if (!currentAccelerator || event.keycode !== currentAccelerator.keycode) return;
+      if (!currentAccelerator || currentAccelerator.keycode === undefined) return;
+      if (event.keycode !== currentAccelerator.keycode) return;
+      micKeyHeld = false;
+      if (micMode === 'ptt') sendPtt(false);
+    });
+
+    hook.on('mousedown', (event) => {
+      for (const binding of broadcastBindings) {
+        if (binding.mouse === undefined) continue;
+        if (!mouseMatches(event, binding)) continue;
+        if (broadcastHeld.has(binding.target)) return;
+        broadcastHeld.add(binding.target);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('broadcast:toggle', binding.target);
+        }
+        return;
+      }
+
+      if (!mouseMatches(event, currentAccelerator)) return;
+      if (micMode === 'toggle') {
+        if (micKeyHeld) return;
+        micKeyHeld = true;
+        sendMicToggle();
+        return;
+      }
+      if (micMode === 'ptt') sendPtt(true);
+    });
+
+    hook.on('mouseup', (event) => {
+      for (const binding of broadcastBindings) {
+        if (binding.mouse === undefined) continue;
+        if (event.button === binding.mouse) broadcastHeld.delete(binding.target);
+      }
+
+      if (!currentAccelerator || currentAccelerator.mouse === undefined) return;
+      if (event.button !== currentAccelerator.mouse) return;
       micKeyHeld = false;
       if (micMode === 'ptt') sendPtt(false);
     });

@@ -18,7 +18,12 @@ import { voice } from './lib/voice';
 import { preloadNoiseSuppressor } from './lib/micGate';
 import { logout, toast, toggleBroadcastAll, toggleBroadcastGroup } from './lib/actions';
 import { desktop } from './lib/desktop';
-import { isGlobalAccelerator, matchesPttKey, matchesPttRelease } from './lib/settings';
+import {
+  isGlobalAccelerator,
+  matchesPointerKey,
+  matchesPttKey,
+  matchesPttRelease,
+} from './lib/settings';
 import { cn, isTypingTarget, serverLabel } from './lib/utils';
 import { currentServerUrl, rememberServer } from './lib/servers';
 import { hasPermission } from '@tsds/shared';
@@ -276,6 +281,9 @@ export function App() {
 
   useEffect(() => {
     if (settings.mode === 'open' || !voiceChannelId) return;
+    // В приложении для Windows назначение приходит из глобального хука.
+    // Оконные обработчики в этом случае только задвоили бы нажатие.
+    if (desktop && globalHotkeys) return;
 
     const down = (event: KeyboardEvent) => {
       if (event.repeat || isTypingTarget(event.target)) return;
@@ -289,20 +297,45 @@ export function App() {
       if (!matchesPttRelease(event, settings.pttKey)) return;
       voice.setPtt(false);
     };
+    const pointerDown = (event: PointerEvent) => {
+      if (event.button === 0 || isTypingTarget(event.target)) return;
+      if (!matchesPointerKey(event, settings.pttKey)) return;
+      event.preventDefault();
+      if (settings.mode === 'toggle') voice.toggleMicByKey();
+      else voice.setPtt(true);
+    };
+    const pointerUp = (event: PointerEvent) => {
+      if (settings.mode !== 'ptt') return;
+      if (!matchesPointerKey(event, settings.pttKey)) return;
+      event.preventDefault();
+      voice.setPtt(false);
+    };
+    // Боковые кнопки мыши в браузере по умолчанию листают историю.
+    const auxClick = (event: MouseEvent) => {
+      if (event.button !== 0 && matchesPointerKey(event, settings.pttKey)) {
+        event.preventDefault();
+      }
+    };
     const release = () => voice.setPtt(false);
 
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('pointerdown', pointerDown);
+    window.addEventListener('pointerup', pointerUp);
+    window.addEventListener('auxclick', auxClick);
     window.addEventListener('blur', release);
     document.addEventListener('visibilitychange', release);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('pointerdown', pointerDown);
+      window.removeEventListener('pointerup', pointerUp);
+      window.removeEventListener('auxclick', auxClick);
       window.removeEventListener('blur', release);
       document.removeEventListener('visibilitychange', release);
       voice.setPtt(false);
     };
-  }, [settings.mode, settings.pttKey, voiceChannelId]);
+  }, [settings.mode, settings.pttKey, voiceChannelId, globalHotkeys]);
 
   useEffect(() => {
     if (!desktop) return;
