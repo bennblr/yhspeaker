@@ -15,6 +15,7 @@ import { useApp } from './lib/store';
 import { connectSocket, getSocket } from './lib/socket';
 import { describeDevice } from './lib/device';
 import { voice } from './lib/voice';
+import { preloadNoiseSuppressor } from './lib/micGate';
 import { logout, toast, toggleBroadcastAll, toggleBroadcastGroup } from './lib/actions';
 import { desktop } from './lib/desktop';
 import { isGlobalAccelerator, matchesPttKey, matchesPttRelease } from './lib/settings';
@@ -87,6 +88,20 @@ export function App() {
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
+
+  // Модель шумоподавления весит ~23 МБ: греем её в простое, чтобы первое
+  // подключение к голосовому каналу не ждало загрузку.
+  useEffect(() => {
+    if (!token || !settings.noiseSuppression) return;
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(() => void preloadNoiseSuppressor(), {
+        timeout: 8000,
+      });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(() => void preloadNoiseSuppressor(), 3000);
+    return () => window.clearTimeout(timer);
+  }, [token, settings.noiseSuppression]);
 
   const [serverConfig, setServerConfig] = useState<PublicServerConfig | null>(null);
   const [configError, setConfigError] = useState(false);

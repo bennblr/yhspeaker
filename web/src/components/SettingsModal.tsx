@@ -262,11 +262,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [level, setLevel] = useState(0);
   const [testError, setTestError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState<{
-    noiseSuppression?: boolean;
-    echoCancellation?: boolean;
-  } | null>(null);
   const [neuralSuppression, setNeuralSuppression] = useState<boolean | null>(null);
+  const [neuralLoading, setNeuralLoading] = useState(false);
   const [monitor, setMonitor] = useState(false);
   const [testRetry, setTestRetry] = useState(0);
   const [nickname, setNickname] = useState('');
@@ -299,7 +296,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   ? { exact: settings.inputDeviceId }
                   : undefined,
               echoCancellation: settings.echoCancellation,
-              noiseSuppression: settings.noiseSuppression,
+              noiseSuppression: false,
               autoGainControl: settings.autoGainControl,
               channelCount: 1,
             },
@@ -319,9 +316,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           source.connect(analyser);
 
           const gate = await createMicGateNode(ctx);
+          if (settings.noiseSuppression) setNeuralLoading(true);
           const suppressor = settings.noiseSuppression
             ? await createNoiseSuppressorNode(ctx)
             : null;
+          if (!cancelled) setNeuralLoading(false);
           if (cancelled) {
             suppressor?.destroy();
             stream.getTracks().forEach((track) => track.stop());
@@ -358,14 +357,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           setNeuralSuppression(settings.noiseSuppression ? Boolean(suppressor) : null);
           if (ctx.state === 'suspended') await ctx.resume().catch(() => undefined);
 
-          const trackSettings = (stream.getAudioTracks()[0]?.getSettings() ?? {}) as MediaTrackSettings & {
-            noiseSuppression?: boolean;
-            echoCancellation?: boolean;
-          };
-          setProcessing({
-            noiseSuppression: trackSettings.noiseSuppression,
-            echoCancellation: trackSettings.echoCancellation,
-          });
           setTestStream(destination.stream);
           setTestError(null);
 
@@ -424,8 +415,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setTestStream(null);
       setLevel(0);
       setTestError(null);
-      setProcessing(null);
       setNeuralSuppression(null);
+      setNeuralLoading(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -836,7 +827,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 checked={settings.noiseSuppression}
                 onChange={(value) => updateSettings({ noiseSuppression: value })}
                 title="Шумоподавление"
-                description="Нейросетевая модель (GTCRN) убирает кашель, клавиатуру, вентилятор и улицу."
+                description="DeepFilterNet3 убирает кашель, клавиатуру, вентилятор и улицу."
               />
               <Toggle
                 checked={settings.autoGainControl}
@@ -935,22 +926,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </p>
               </div>
 
-              {settings.noiseSuppression && processing && (
-                <p
-                  className={cn(
-                    'mt-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed',
-                    processing.noiseSuppression
-                      ? 'border-ok/20 bg-ok/5 text-ok'
-                      : 'border-warn/20 bg-warn/5 text-warn',
-                  )}
-                >
-                  {processing.noiseSuppression
-                    ? 'Браузер применяет шумоподавление к этому микрофону. «Слышать себя» идёт через него же.'
-                    : 'Браузер не применил шумоподавление к этому микрофону: остаются фильтр низких частот и порог чувствительности.'}
+              {settings.noiseSuppression && neuralLoading && (
+                <p className="mt-2 rounded-lg border border-line bg-panel2 px-2.5 py-2 text-[11px] leading-relaxed text-muted">
+                  Загружаем модель шумоподавления DeepFilterNet3 (около 23 МБ, один раз на
+                  устройство)…
                 </p>
               )}
 
-              {settings.noiseSuppression && neuralSuppression !== null && (
+              {settings.noiseSuppression && !neuralLoading && neuralSuppression !== null && (
                 <p
                   className={cn(
                     'mt-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed',
@@ -960,8 +943,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   )}
                 >
                   {neuralSuppression
-                    ? 'Нейросетевое шумоподавление активно: кашель и посторонние звуки не передаются.'
-                    : 'Нейросетевое шумоподавление недоступно в этом браузере — работают фильтр и порог.'}
+                    ? 'DeepFilterNet3 активен: кашель, клавиатура и посторонний фон не передаются.'
+                    : 'Модель шумоподавления не загрузилась — работают фильтр низких частот и порог чувствительности.'}
                 </p>
               )}
 

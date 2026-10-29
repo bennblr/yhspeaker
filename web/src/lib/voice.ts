@@ -279,7 +279,9 @@ export class VoiceEngine {
         deviceId:
           settings.inputDeviceId !== 'default' ? { exact: settings.inputDeviceId } : undefined,
         echoCancellation: settings.echoCancellation,
-        noiseSuppression: settings.noiseSuppression,
+        // Шумодав браузера выключен всегда: он поднимает шум вместе с голосом
+        // (особенно при AGC) и мешает модели, которая идёт следом.
+        noiseSuppression: false,
         autoGainControl: settings.autoGainControl,
         channelCount: 1,
       },

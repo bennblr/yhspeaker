@@ -1,6 +1,7 @@
-import { GtcrnWorkletNode, loadGtcrn } from '@sapphi-red/web-noise-suppressor';
-import gtcrnWorkletUrl from '@sapphi-red/web-noise-suppressor/gtcrnWorklet.js?url';
-import gtcrnWasmUrl from '@sapphi-red/web-noise-suppressor/gtcrn.wasm?url';
+import {
+  createDeepFilterNetAudioWorklet,
+  DEEPFILTERNET_SAMPLE_RATE,
+} from '@workadventure/noise-suppression/deepfilternet';
 import { sensitivityThreshold } from './settings';
 
 // Гейт работает в аудиопотоке, поэтому не зависит от троттлинга таймеров в фоне.
@@ -112,56 +113,75 @@ export function createNoiseFilter(ctx: AudioContext): BiquadFilterNode {
   return filter;
 }
 
-// GTCRN — лёгкая нейросетевая модель шумоподавления: убирает не только ровный
-// фон, но и кашель, клавиатуру, посуду и прочие неречевые звуки.
-const SUPPORTED_RATES = [16_000, 48_000];
-let gtcrnBinary: Promise<ArrayBuffer> | null = null;
-
-function loadGtcrnBinary(): Promise<ArrayBuffer> {
-  if (!gtcrnBinary) {
-    gtcrnBinary = loadGtcrn({ url: gtcrnWasmUrl }).catch((error) => {
-      gtcrnBinary = null;
-      throw error;
-    });
-  }
-  return gtcrnBinary;
-}
-
+// DeepFilterNet3 — полноценная нейросетевая модель (48 кГц) с паузным гейтом:
+// она не только вычитает ровный фон, но и не даёт открыться на щелчках клавиатуры,
+// а кашель и прочие неречевые звуки уходят в паузы между словами.
 export interface NoiseSuppressorNode {
   node: AudioWorkletNode;
+  ready: Promise<unknown>;
   destroy: () => void;
 }
 
 export async function createNoiseSuppressorNode(
   ctx: AudioContext,
 ): Promise<NoiseSuppressorNode | null> {
-  if (!SUPPORTED_RATES.includes(ctx.sampleRate)) return null;
+  // Модель требует строго 48 кГц; при другой частоте контекста не рискуем.
+  if (ctx.sampleRate !== DEEPFILTERNET_SAMPLE_RATE) return null;
   try {
-    const [binary] = await Promise.all([loadGtcrnBinary(), ctx.audioWorklet.addModule(gtcrnWorkletUrl)]);
-    const node = new GtcrnWorkletNode(ctx, { maxChannels: 1, wasmBinary: binary });
+    const handle = await createDeepFilterNetAudioWorklet(ctx, {
+      // Один кадр упреждения вместо трёх: −20 мс задержки, атака слов сохраняется.
+      pauseGateLookaheadFrames: 1,
+      // Двух речевых кадров подряд мало для короткого щелчка клавиши.
+      minSpeechFrames: 2,
+      // Чуть сильнее режем неречевой фон, пока человек говорит (по умолчанию 25 дБ).
+      speechAttenuationDb: 30,
+    });
     return {
-      node,
+      node: handle.node,
+      ready: handle.ready,
       destroy: () => {
         try {
-          node.destroy();
+          handle.dispose();
         } catch {
           /* уже уничтожен */
-        }
-        try {
-          node.disconnect();
-        } catch {
-          /* уже отключён */
         }
       },
     };
   } catch (error) {
-    console.warn('[mic] neural suppression unavailable', error);
+    console.warn('[mic] DeepFilterNet3 unavailable', error);
     return null;
   }
 }
 
-// Модель работает только с 16 или 48 кГц, поэтому микрофонный контекст
-// фиксируем на 48 кГц — это ещё и родная частота Opus.
+// Модель весит ~23 МБ, поэтому скачиваем и компилируем её в простое сразу
+// после входа: первое подключение к каналу не должно ждать загрузку.
+// Скомпилированный wasm и байты модели пакет кеширует на уровне модуля,
+// поэтому реальный микрофонный контекст получит их уже готовыми.
+let preloadPromise: Promise<void> | null = null;
+
+export function preloadNoiseSuppressor(): Promise<void> {
+  if (!preloadPromise) {
+    preloadPromise = (async () => {
+      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+      let ctx: AudioContext | null = null;
+      try {
+        ctx = new Ctx({ sampleRate: DEEPFILTERNET_SAMPLE_RATE }) as AudioContext;
+        const handle = await createDeepFilterNetAudioWorklet(ctx);
+        void handle.ready.catch(() => undefined);
+        handle.dispose();
+      } catch (error) {
+        preloadPromise = null;
+        console.warn('[mic] DeepFilterNet3 preload failed', error);
+      } finally {
+        if (ctx) void ctx.close().catch(() => undefined);
+      }
+    })();
+  }
+  return preloadPromise;
+}
+
+// Модель работает только с 48 кГц, поэтому микрофонный контекст фиксируем
+// на 48 кГц — это ещё и родная частота Opus.
 export function createMicAudioContext(): AudioContext {
   const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
   try {

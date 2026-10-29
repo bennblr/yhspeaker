@@ -9,6 +9,7 @@ import {
   Radio,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import { Avatar } from './Avatar';
 import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
+import { VolumeMenu } from './VolumeMenu';
 import { useApp } from '../lib/store';
 import { cn, serverLabel } from '../lib/utils';
 import { canDragUser, joinVoice, moveUserToChannel, selectChannel } from '../lib/actions';
@@ -33,6 +35,7 @@ interface DragState {
 const DragContext = createContext<DragState | null>(null);
 
 function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolean }) {
+  const me = useApp((state) => state.me);
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
   const volume = useApp((state) => state.userVolumes[user.id] ?? 1);
@@ -40,6 +43,8 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
   const drag = useContext(DragContext);
   const draggable = drag !== null && canDragUser(user);
   const dragging = drag?.user?.sessionId === user.sessionId;
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const isSelf = me?.id === user.id;
 
   return (
     <div
@@ -64,6 +69,19 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
       >
         {user.displayName}
       </span>
+      {!isSelf && (
+        <button
+          type="button"
+          className={cn(
+            'shrink-0 rounded p-0.5 text-muted opacity-60 transition hover:bg-white/[0.06] hover:text-slate-200 hover:opacity-100',
+            volume !== 1 && 'text-accent opacity-100',
+          )}
+          title={`Громкость и заглушение (${Math.round(volume * 100)}%)`}
+          onClick={(event) => setMenuAnchor(event.currentTarget)}
+        >
+          <SlidersHorizontal className="h-3 w-3" />
+        </button>
+      )}
       <DeviceBadge device={user.device} deviceName={user.deviceName} />
       <LabelBadge label={user.label} />
       {user.role === 'admin' && (
@@ -103,15 +121,20 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
           <MicOff className={cn('h-3 w-3', user.serverMuted ? 'text-danger' : 'text-muted')} />
         )}
       </span>
+      {menuAnchor && (
+        <VolumeMenu user={user} anchor={menuAnchor} onClose={() => setMenuAnchor(null)} />
+      )}
     </div>
   );
 }
 
 function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speaking: Set<string> }) {
+  const me = useApp((state) => state.me);
   const roles = useApp((state) => state.roles);
   const localMutedIds = useApp((state) => state.localMuted);
   const userVolumes = useApp((state) => state.userVolumes);
   const drag = useContext(DragContext);
+  const [menu, setMenu] = useState<{ user: OnlineUser; anchor: HTMLElement } | null>(null);
 
   return (
     <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-0.5">
@@ -146,6 +169,19 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
             >
               {user.displayName}
             </span>
+            {me?.id !== user.id && (
+              <button
+                type="button"
+                className={cn(
+                  'shrink-0 rounded p-0.5 text-muted transition hover:bg-white/[0.06] hover:text-slate-200',
+                  volume !== 1 && 'text-accent',
+                )}
+                title={`Громкость и заглушение (${Math.round(volume * 100)}%)`}
+                onClick={(event) => setMenu({ user, anchor: event.currentTarget })}
+              >
+                <SlidersHorizontal className="h-3 w-3" />
+              </button>
+            )}
             <LabelBadge label={user.label} />
             <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
             {volume !== 1 && (
@@ -168,6 +204,13 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
           </span>
         );
       })}
+      {menu && (
+        <VolumeMenu
+          user={menu.user}
+          anchor={menu.anchor}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

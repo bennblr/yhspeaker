@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { noiseSuppressionAudioWorkletVitePlugin } from '@workadventure/noise-suppression/vite';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), noiseSuppressionAudioWorkletVitePlugin()],
   server: {
     port: 5173,
     proxy: {
