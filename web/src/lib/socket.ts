@@ -1,14 +1,14 @@
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, ServerToClientEvents } from '@tsds/shared';
+import type { ClientToServerEvents, DeviceInfo, ServerToClientEvents } from '@tsds/shared';
 
 export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 let socket: AppSocket | null = null;
 
-export function connectSocket(token: string): AppSocket {
+export function connectSocket(token: string, device?: DeviceInfo): AppSocket {
   socket?.disconnect();
   socket = io(window.location.origin, {
-    auth: { token },
+    auth: { token, device },
     transports: ['websocket', 'polling'],
     reconnectionDelay: 800,
     reconnectionDelayMax: 5000,

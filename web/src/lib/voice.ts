@@ -8,6 +8,7 @@ import { applyMicGate, applyRemoteLevel, createMicGateNode, createNoiseFilter } 
 interface ConsumerEntry {
   consumer: MT.Consumer;
   userId: string;
+  sessionId: string;
   kind: 'audio' | 'video';
   source: 'mic' | 'screen';
 }
@@ -119,7 +120,7 @@ export class VoiceEngine {
       pttActive: false,
       localScreen: null,
       remoteScreens: {},
-      viewerUserId: null,
+      viewerSessionId: null,
     });
     this.wantMic = false;
 
@@ -378,8 +379,19 @@ export class VoiceEngine {
       Boolean(this.micProducer) &&
       !this.muted &&
       !this.deafened &&
-      (settings.mode === 'open' || this.pttActive)
+      (settings.mode !== 'ptt' || this.pttActive)
     );
+  }
+
+  // Глобальная кнопка микрофона: в режиме «по кнопке» переключает передачу,
+  // а если микрофон ещё не создан — включает его.
+  toggleMicByKey(): void {
+    if (!this.currentChannelId) return;
+    if (!this.wantMic || !this.micProducer) {
+      void this.enableMic();
+      return;
+    }
+    this.setMuted(!this.muted);
   }
 
   private applyMicGate(): void {
@@ -597,6 +609,7 @@ export class VoiceEngine {
       this.consumers.set(consumer.id, {
         consumer,
         userId: params.userId,
+        sessionId: params.sessionId,
         kind: params.kind,
         source: params.source,
       });
@@ -609,7 +622,7 @@ export class VoiceEngine {
         element.setAttribute('playsinline', '');
         element.volume = Math.max(0, Math.min(1, this.mySettings().outputVolume));
         element.muted = this.deafened || this.localMuted.has(params.userId);
-        element.setAttribute('data-la2speak-audio', params.userId);
+        element.setAttribute('data-la2speak-audio', params.sessionId);
         document.body.appendChild(element);
         void element.play().catch(() => undefined);
         this.audioElements.set(consumer.id, element);
@@ -617,8 +630,8 @@ export class VoiceEngine {
         this.startRemoteLevelWatch();
       } else {
         const stream = new MediaStream([consumer.track]);
-        this.screenStreams.set(params.userId, stream);
-        useApp.getState().setRemoteScreen(params.userId, stream);
+        this.screenStreams.set(params.sessionId, stream);
+        useApp.getState().setRemoteScreen(params.sessionId, stream);
       }
 
       consumer.on('transportclose', () => this.removeConsumer(consumer.id));
@@ -648,12 +661,12 @@ export class VoiceEngine {
       this.audioElements.delete(consumerId);
     }
     if (entry.kind === 'video') {
-      const stream = this.screenStreams.get(entry.userId);
+      const stream = this.screenStreams.get(entry.sessionId);
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
-        this.screenStreams.delete(entry.userId);
+        this.screenStreams.delete(entry.sessionId);
       }
-      useApp.getState().setRemoteScreen(entry.userId, null);
+      useApp.getState().setRemoteScreen(entry.sessionId, null);
     }
   }
 
@@ -791,7 +804,7 @@ export class VoiceEngine {
         voice: {
           ...state.voice,
           remoteScreens: {},
-          viewerUserId: null,
+          viewerSessionId: null,
           pttActive: false,
           localScreen: null,
         },
@@ -811,7 +824,7 @@ export class VoiceEngine {
       pttActive: false,
       localScreen: null,
       remoteScreens: {},
-      viewerUserId: null,
+      viewerSessionId: null,
     });
   }
 

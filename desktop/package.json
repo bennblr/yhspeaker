@@ -1,6 +1,6 @@
 {
   "name": "@tsds/desktop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "LA2Speak desktop client for Windows",
   "author": "LA2Speak",
@@ -27,7 +27,8 @@
       "server-url.js",
       "launcher.html",
       "launcher.js",
-      "build/icon.png"
+      "build/icon.png",
+      "build/tray/*.png"
     ],
     "extraResources": [
       {

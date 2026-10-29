@@ -4,6 +4,8 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Tray,
+  nativeImage,
   dialog,
   ipcMain,
   session,
@@ -37,8 +39,36 @@ const heldModifierKeycodes = new Set();
 const modifierKeycodes = new Map();
 let pttHeld = false;
 let quitting = false;
+let tray = null;
+// Режим клавиши микрофона: open — не используется, ptt — удержание, toggle — вкл/выкл.
+let micMode = 'open';
+let micKeyHeld = false;
+let micState = {
+  inCall: false,
+  on: false,
+  muted: false,
+  broadcasting: false,
+  channelName: '',
+};
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
+
+function sanitizeServers(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const url = typeof item.url === 'string' ? normalizeServerUrl(item.url) : null;
+    if (!url) continue;
+    if (result.some((entry) => entry.url === url)) continue;
+    result.push({
+      url,
+      name: typeof item.name === 'string' ? item.name.slice(0, 60) : '',
+      lastUsed: Number.isFinite(item.lastUsed) ? item.lastUsed : 0,
+    });
+  }
+  return result.slice(0, 15);
+}
 
 function loadConfig() {
   try {
@@ -47,9 +77,10 @@ function loadConfig() {
     return {
       serverUrl: typeof parsed.serverUrl === 'string' ? parsed.serverUrl : '',
       pttKey: typeof parsed.pttKey === 'string' ? parsed.pttKey : 'V',
+      servers: sanitizeServers(parsed.servers),
     };
   } catch {
-    return { serverUrl: '', pttKey: 'V' };
+    return { serverUrl: '', pttKey: 'V', servers: [] };
   }
 }
 
@@ -63,6 +94,27 @@ function saveConfig(config) {
 }
 
 let stored = loadConfig();
+
+// История серверов: в шапке показываются все, куда пользователь уже заходил.
+function rememberServer(url, name) {
+  const normalized = normalizeServerUrl(url);
+  if (!normalized) return;
+  const existing = stored.servers.find((entry) => entry.url === normalized);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    if (name) existing.name = name.slice(0, 60);
+  } else {
+    stored.servers.unshift({
+      url: normalized,
+      name: name ? name.slice(0, 60) : '',
+      lastUsed: Date.now(),
+    });
+  }
+  stored.servers.sort((a, b) => b.lastUsed - a.lastUsed);
+  stored.servers = stored.servers.slice(0, 15);
+  stored.serverUrl = normalized;
+  saveConfig(stored);
+}
 
 function resolveStartUrl() {
   const saved = stored.serverUrl ? normalizeServerUrl(stored.serverUrl) : null;
@@ -99,6 +151,8 @@ function createMainWindow(serverUrl) {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      // Микрофон должен реагировать на глобальную клавишу и в свёрнутом окне.
+      backgroundThrottling: false,
     },
   });
 
@@ -216,6 +270,88 @@ function sendPtt(down) {
   }
 }
 
+function sendMicToggle() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('mic:toggle');
+  }
+}
+
+function trayImage(name) {
+  const image = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray', `${name}.png`));
+  return image.isEmpty() ? nativeImage.createFromPath(iconPath()) : image;
+}
+
+function trayTooltip() {
+  const parts = ['LA2Speak'];
+  if (!micState.inCall) {
+    parts.push('не в голосовом канале');
+  } else {
+    if (micState.channelName) parts.push(`«${micState.channelName}»`);
+    parts.push(micState.on ? 'микрофон включён' : 'микрофон выключен');
+  }
+  if (micState.broadcasting) parts.push('эфир');
+  return parts.join(' · ');
+}
+
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  createMainWindow(resolveStartUrl());
+}
+
+function buildTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: micState.inCall
+          ? `Микрофон: ${micState.on ? 'включён' : 'выключен'}`
+          : 'Микрофон: не в канале',
+        enabled: micState.inCall,
+        click: () => sendMicToggle(),
+      },
+      { type: 'separator' },
+      { label: 'Показать LA2Speak', click: () => showMainWindow() },
+      { label: 'Сменить сервер…', click: () => openLauncher() },
+      { type: 'separator' },
+      { label: 'Выход', click: () => app.quit() },
+    ]),
+  );
+}
+
+function updateTray() {
+  if (!tray) return;
+  tray.setImage(trayImage(micState.inCall ? (micState.on ? 'mic-on' : 'mic-off') : 'mic-idle'));
+  tray.setToolTip(trayTooltip());
+  buildTrayMenu();
+  updateOverlay();
+}
+
+// Значок на кнопке приложения в панели задач: видно, передаёт ли микрофон.
+function updateOverlay() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!micState.inCall) {
+    mainWindow.setOverlayIcon(null, '');
+    return;
+  }
+  mainWindow.setOverlayIcon(
+    trayImage(micState.on ? 'overlay-on' : 'overlay-off'),
+    micState.on ? 'Микрофон включён' : 'Микрофон выключен',
+  );
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(trayImage('mic-idle'));
+  tray.on('click', () => showMainWindow());
+  tray.on('double-click', () => showMainWindow());
+  updateTray();
+}
+
 function parseAccelerator(accelerator) {
   if (!accelerator || !uiohookKeys) return null;
   const parts = String(accelerator).split('+');
@@ -234,6 +370,7 @@ function parseAccelerator(accelerator) {
 
 function setAccelerator(accelerator) {
   sendPtt(false);
+  micKeyHeld = false;
   currentAccelerator = parseAccelerator(accelerator);
   return Boolean(currentAccelerator);
 }
@@ -307,7 +444,13 @@ function startKeyboardHook() {
       }
 
       if (!eventMatches(event, currentAccelerator)) return;
-      sendPtt(true);
+      if (micMode === 'toggle') {
+        if (micKeyHeld) return;
+        micKeyHeld = true;
+        sendMicToggle();
+        return;
+      }
+      if (micMode === 'ptt') sendPtt(true);
     });
 
     hook.on('keyup', (event) => {
@@ -317,7 +460,8 @@ function startKeyboardHook() {
       updateModifier(event, false);
 
       if (!currentAccelerator || event.keycode !== currentAccelerator.keycode) return;
-      sendPtt(false);
+      micKeyHeld = false;
+      if (micMode === 'ptt') sendPtt(false);
     });
 
     hook.start();
@@ -331,6 +475,25 @@ ipcMain.handle('ptt:set-key', (_event, accelerator) => {
   stored.pttKey = typeof accelerator === 'string' ? accelerator : 'V';
   saveConfig(stored);
   return setAccelerator(stored.pttKey);
+});
+
+ipcMain.handle('mic:set-mode', (_event, mode) => {
+  micMode = mode === 'ptt' || mode === 'toggle' ? mode : 'open';
+  micKeyHeld = false;
+  sendPtt(false);
+  return micMode;
+});
+
+ipcMain.on('mic:state', (_event, state) => {
+  if (!state || typeof state !== 'object') return;
+  micState = {
+    inCall: Boolean(state.inCall),
+    on: Boolean(state.on),
+    muted: Boolean(state.muted),
+    broadcasting: Boolean(state.broadcasting),
+    channelName: typeof state.channelName === 'string' ? state.channelName : '',
+  };
+  updateTray();
 });
 
 ipcMain.handle('broadcast:set-keys', (_event, bindings) => {
@@ -375,6 +538,68 @@ ipcMain.handle('app:change-server', () => {
   openLauncher();
 });
 
+ipcMain.handle('app:list-servers', () => {
+  const current = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getURL() : '';
+  let currentUrl = stored.serverUrl;
+  try {
+    if (current) currentUrl = new URL(current).origin;
+  } catch {
+    /* ignore */
+  }
+  return stored.servers
+    .slice()
+    .sort((a, b) => b.lastUsed - a.lastUsed)
+    .map((entry) => ({
+      ...entry,
+      current: entry.url === normalizeServerUrl(currentUrl),
+    }));
+});
+
+ipcMain.handle('app:switch-server', async (_event, value) => {
+  const url = normalizeServerUrl(value);
+  if (!url) return { ok: false, error: 'Некорректный адрес сервера' };
+  rememberServer(url);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(url);
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    createMainWindow(url);
+  }
+  return { ok: true, url };
+});
+
+ipcMain.handle('app:set-server-name', (_event, name) => {
+  if (typeof name !== 'string') return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const current = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getURL() : '';
+  let url = stored.serverUrl;
+  try {
+    if (current) url = new URL(current).origin;
+  } catch {
+    /* ignore */
+  }
+  const normalized = normalizeServerUrl(url);
+  if (!normalized) return;
+  const entry = stored.servers.find((item) => item.url === normalized);
+  if (!entry) {
+    stored.servers.unshift({ url: normalized, name: trimmed.slice(0, 60), lastUsed: Date.now() });
+  } else if (entry.name !== trimmed.slice(0, 60)) {
+    entry.name = trimmed.slice(0, 60);
+  } else {
+    return;
+  }
+  saveConfig(stored);
+});
+
+ipcMain.handle('launcher:servers', () => {
+  return stored.servers
+    .slice()
+    .sort((a, b) => b.lastUsed - a.lastUsed)
+    .map((entry) => ({ ...entry, current: entry.url === stored.serverUrl }));
+});
+
 ipcMain.handle('launcher:current-url', () => stored.serverUrl || '');
 
 ipcMain.handle('launcher:default-domain', () => DEFAULT_SERVER_DOMAIN);
@@ -384,8 +609,7 @@ ipcMain.handle('launcher:connect', (_event, value) => {
   if (!url) {
     return { ok: false, error: 'Укажите адрес сервера, например chat или chat.la2speak.com' };
   }
-  stored.serverUrl = url;
-  saveConfig(stored);
+  rememberServer(url);
   if (launcherWindow && !launcherWindow.isDestroyed()) {
     launcherWindow.close();
   }
@@ -537,6 +761,7 @@ if (!singleInstance) {
     setAccelerator(stored.pttKey);
 
     createMainWindow(resolveStartUrl());
+    createTray();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

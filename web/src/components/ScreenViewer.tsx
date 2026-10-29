@@ -5,13 +5,15 @@ import { useApp } from '../lib/store';
 import { closeScreenViewer } from '../lib/actions';
 
 export function ScreenViewer() {
-  const viewerId = useApp((state) => state.voice.viewerUserId);
+  const viewerId = useApp((state) => state.voice.viewerSessionId);
   const stream = useApp((state) =>
-    state.voice.viewerUserId ? state.voice.remoteScreens[state.voice.viewerUserId] : undefined,
+    state.voice.viewerSessionId
+      ? state.voice.remoteScreens[state.voice.viewerSessionId]
+      : undefined,
   );
   const user = useApp((state) =>
-    state.voice.viewerUserId
-      ? state.users.find((item) => item.id === state.voice.viewerUserId)
+    state.voice.viewerSessionId
+      ? state.users.find((item) => item.sessionId === state.voice.viewerSessionId)
       : undefined,
   );
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,7 +53,9 @@ export function ScreenViewer() {
           <div className="truncate text-sm font-semibold text-slate-100">
             Экран: {user?.displayName ?? 'Участник'}
           </div>
-          <div className="text-[10px] uppercase tracking-wider text-muted">демонстрация экрана</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted">
+            демонстрация экрана{user ? ` · ${user.deviceName}` : ''}
+          </div>
         </div>
         <button className="icon-btn h-8 w-8" onClick={fullscreen} title="На весь экран">
           <Maximize2 className="h-4 w-4" />

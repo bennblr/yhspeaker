@@ -6,10 +6,17 @@ contextBridge.exposeInMainWorld('la2speak', {
   isDesktop: true,
   platform: process.platform,
   setPttKey: (accelerator) => ipcRenderer.invoke('ptt:set-key', accelerator),
+  setMicMode: (mode) => ipcRenderer.invoke('mic:set-mode', mode),
+  setMicState: (state) => ipcRenderer.send('mic:state', state),
   onPtt: (callback) => {
     const listener = (_event, down) => callback(Boolean(down));
     ipcRenderer.on('ptt', listener);
     return () => ipcRenderer.removeListener('ptt', listener);
+  },
+  onMicToggle: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('mic:toggle', listener);
+    return () => ipcRenderer.removeListener('mic:toggle', listener);
   },
   setBroadcastKeys: (bindings) => ipcRenderer.invoke('broadcast:set-keys', bindings),
   onBroadcastToggle: (callback) => {
@@ -19,6 +26,9 @@ contextBridge.exposeInMainWorld('la2speak', {
   },
   hotkeysAvailable: () => ipcRenderer.invoke('hotkeys:available'),
   changeServer: () => ipcRenderer.invoke('app:change-server'),
+  listServers: () => ipcRenderer.invoke('app:list-servers'),
+  switchServer: (url) => ipcRenderer.invoke('app:switch-server', url),
+  setServerName: (name) => ipcRenderer.invoke('app:set-server-name', name),
   getVersion: () => ipcRenderer.invoke('app:version'),
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -38,4 +48,5 @@ contextBridge.exposeInMainWorld('launcher', {
   quit: () => ipcRenderer.invoke('launcher:quit'),
   currentUrl: () => ipcRenderer.invoke('launcher:current-url'),
   defaultDomain: () => ipcRenderer.invoke('launcher:default-domain'),
+  servers: () => ipcRenderer.invoke('launcher:servers'),
 });

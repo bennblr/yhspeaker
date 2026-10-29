@@ -1,4 +1,4 @@
-import type { OnlineUser } from '@tsds/shared';
+import type { DeviceInfo, OnlineUser } from '@tsds/shared';
 import type { Account } from './auth.js';
 import type { AppServer, AppSocket } from './types.js';
 
@@ -7,15 +7,21 @@ interface SessionEntry {
   online: OnlineUser;
 }
 
+// Один аккаунт может быть подключён с нескольких устройств: каждая вкладка,
+// браузер или копия приложения — отдельная сессия со своим голосовым состоянием.
 export class SessionService {
   private readonly sessions = new Map<string, SessionEntry>();
+  private readonly byAccount = new Map<string, Set<string>>();
   private readonly unlocked = new Map<string, Set<string>>();
 
   constructor(private readonly io: AppServer) {}
 
-  static onlineFrom(account: Account): OnlineUser {
+  static onlineFrom(account: Account, sessionId: string, device: DeviceInfo): OnlineUser {
     return {
       id: account.id,
+      sessionId,
+      device: device.kind,
+      deviceName: device.name,
       username: account.username,
       displayName: account.displayName,
       label: account.label,
@@ -33,18 +39,32 @@ export class SessionService {
     };
   }
 
-  register(socket: AppSocket, account: Account): OnlineUser {
-    const entry: SessionEntry = { socket, online: SessionService.onlineFrom(account) };
-    this.sessions.set(account.id, entry);
+  register(socket: AppSocket, account: Account, device: DeviceInfo): OnlineUser {
+    const entry: SessionEntry = {
+      socket,
+      online: SessionService.onlineFrom(account, socket.id, device),
+    };
+    this.sessions.set(socket.id, entry);
+    let ids = this.byAccount.get(account.id);
+    if (!ids) {
+      ids = new Set();
+      this.byAccount.set(account.id, ids);
+    }
+    ids.add(socket.id);
     this.broadcastUsers();
     return entry.online;
   }
 
-  unregister(userId: string, socketId: string): OnlineUser | undefined {
-    const entry = this.sessions.get(userId);
-    if (!entry || entry.socket.id !== socketId) return undefined;
-    this.sessions.delete(userId);
-    this.unlocked.delete(userId);
+  unregister(sessionId: string): OnlineUser | undefined {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    this.sessions.delete(sessionId);
+    const ids = this.byAccount.get(entry.online.id);
+    ids?.delete(sessionId);
+    if (ids && ids.size === 0) {
+      this.byAccount.delete(entry.online.id);
+      this.unlocked.delete(entry.online.id);
+    }
     this.broadcastUsers();
     return entry.online;
   }
@@ -66,36 +86,88 @@ export class SessionService {
     for (const set of this.unlocked.values()) set.delete(channelId);
   }
 
-  has(userId: string): boolean {
-    return this.sessions.has(userId);
+  has(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
   }
 
-  get(userId: string): OnlineUser | undefined {
-    return this.sessions.get(userId)?.online;
+  hasAccount(userId: string): boolean {
+    return (this.byAccount.get(userId)?.size ?? 0) > 0;
   }
 
-  getSocket(userId: string): AppSocket | undefined {
-    return this.sessions.get(userId)?.socket;
+  get(sessionId: string): OnlineUser | undefined {
+    return this.sessions.get(sessionId)?.online;
+  }
+
+  getSocket(sessionId: string): AppSocket | undefined {
+    return this.sessions.get(sessionId)?.socket;
+  }
+
+  sessionsOf(userId: string): OnlineUser[] {
+    const ids = this.byAccount.get(userId);
+    if (!ids) return [];
+    const result: OnlineUser[] = [];
+    for (const sessionId of ids) {
+      const entry = this.sessions.get(sessionId);
+      if (entry) result.push(entry.online);
+    }
+    return result;
+  }
+
+  socketsOf(userId: string): AppSocket[] {
+    const ids = this.byAccount.get(userId);
+    if (!ids) return [];
+    const result: AppSocket[] = [];
+    for (const sessionId of ids) {
+      const entry = this.sessions.get(sessionId);
+      if (entry) result.push(entry.socket);
+    }
+    return result;
   }
 
   list(): OnlineUser[] {
     return [...this.sessions.values()].map((entry) => entry.online);
   }
 
-  update(userId: string, patch: Partial<OnlineUser>, broadcast = true): OnlineUser | undefined {
-    const entry = this.sessions.get(userId);
+  accountCount(): number {
+    return this.byAccount.size;
+  }
+
+  update(sessionId: string, patch: Partial<OnlineUser>, broadcast = true): OnlineUser | undefined {
+    const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
     Object.assign(entry.online, patch);
     if (broadcast) this.broadcastUsers();
     return entry.online;
   }
 
+  // Изменение свойств аккаунта (роль, ник, мут) применяется ко всем его устройствам.
+  updateAccount(
+    userId: string,
+    patch: Partial<OnlineUser>,
+    broadcast = true,
+  ): OnlineUser[] {
+    const updated: OnlineUser[] = [];
+    for (const online of this.sessionsOf(userId)) {
+      Object.assign(online, patch);
+      updated.push(online);
+    }
+    if (broadcast && updated.length > 0) this.broadcastUsers();
+    return updated;
+  }
+
   broadcastUsers(): void {
     this.io.emit('state:users', this.list());
   }
 
-  endSession(userId: string, reason: string): void {
-    const entry = this.sessions.get(userId);
+  endAccount(userId: string, reason: string): void {
+    for (const socket of this.socketsOf(userId)) {
+      socket.emit('session:ended', { reason });
+      socket.disconnect(true);
+    }
+  }
+
+  endSession(sessionId: string, reason: string): void {
+    const entry = this.sessions.get(sessionId);
     if (!entry) return;
     entry.socket.emit('session:ended', { reason });
     entry.socket.disconnect(true);

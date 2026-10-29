@@ -101,8 +101,20 @@ export function isChannelVisible(
   return channel.visibleRoles.includes('guest');
 }
 
+export type DeviceKind = 'desktop' | 'mobile' | 'tablet';
+
+export interface DeviceInfo {
+  kind: DeviceKind;
+  name: string;
+}
+
 export interface OnlineUser {
+  // Идентификатор аккаунта: права, группы вещания, модерация, авторство сообщений.
   id: string;
+  // Идентификатор подключения: у одного аккаунта может быть несколько устройств.
+  sessionId: string;
+  device: DeviceKind;
+  deviceName: string;
   username: string;
   displayName: string;
   label?: string;
@@ -183,6 +195,7 @@ export interface ConsumerParams {
   consumerId: string;
   producerId: string;
   userId: string;
+  sessionId: string;
   kind: MediaKind;
   source: ProducerSource;
   rtpParameters: unknown;
@@ -191,6 +204,7 @@ export interface ConsumerParams {
 
 export interface SpeakerInfo {
   userId: string;
+  sessionId: string;
   volume: number;
 }
 
@@ -416,9 +430,16 @@ export interface ClientToServerEvents {
     payload: { userId: string; muted: boolean },
     ack?: (res: AckResult) => void,
   ) => void;
-  'mod:kick': (payload: { userId: string }, ack?: (res: AckResult) => void) => void;
+  'mod:kick': (
+    payload: { userId: string; sessionId?: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
   'mod:ban': (
     payload: { userId: string; banned: boolean },
+    ack?: (res: AckResult) => void,
+  ) => void;
+  'mod:deleteUser': (
+    payload: { userId: string },
     ack?: (res: AckResult) => void,
   ) => void;
   'mod:setRole': (
@@ -430,7 +451,7 @@ export interface ClientToServerEvents {
     ack?: (res: AckResult) => void,
   ) => void;
   'mod:moveUser': (
-    payload: { userId: string; channelId: string },
+    payload: { userId: string; sessionId?: string; channelId: string },
     ack?: (res: AckResult) => void,
   ) => void;
   'mod:setUserRoles': (
@@ -469,4 +490,5 @@ export interface InterServerEvents {}
 
 export interface SocketData {
   userId: string;
+  device?: DeviceInfo;
 }

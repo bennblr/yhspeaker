@@ -42,6 +42,7 @@ import {
 } from '@tsds/shared';
 import { Modal } from './Modal';
 import { Avatar } from './Avatar';
+import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
 import { api, type InviteSettings } from '../lib/api';
 import { useApp } from '../lib/store';
@@ -1062,7 +1063,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
         <div className="space-y-1.5">
           {users.map((user) => (
             <OnlineRow
-              key={user.id}
+              key={user.sessionId}
               user={user}
               roles={roles}
               channels={channels}
@@ -1071,8 +1072,8 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
               canAssignBaseRole={isAdmin}
               canPromoteGuest={isModerator}
               canAuthorizeGuest={isAdmin || isModerator}
-              busy={busyKey === `online:${user.id}`}
-              onAction={(key, emit) => runMod(`online:${user.id}`, emit)}
+              busy={busyKey === `online:${user.sessionId}`}
+              onAction={(key, emit) => runMod(`online:${user.sessionId}`, emit)}
             />
           ))}
           {users.length === 0 && <Empty text="Сейчас никого нет в сети." />}
@@ -1110,12 +1111,20 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
               canAssignRoles={canRoles}
               canAssignBaseRole={isAdmin}
               canPromoteGuest={isModerator}
+              canDelete={isAdmin}
               busy={busyKey === `account:${account.id}`}
               onAction={(emit) => runMod(`account:${account.id}`, emit)}
               onRolesSaved={() => void loadAccounts()}
             />
           ))}
           {accounts?.length === 0 && <Empty text="Зарегистрированных аккаунтов нет." />}
+          {isAdmin && accounts && accounts.length > 0 && (
+            <p className="mt-3 rounded-xl border border-line bg-panel/40 px-4 py-3 text-[11px] leading-relaxed text-muted">
+              Удаление аккаунта необратимо: пользователь будет отключён, а его логин и ник
+              освободятся — под ними можно зарегистрироваться заново. Последнего администратора
+              удалить нельзя.
+            </p>
+          )}
         </div>
       )}
 
@@ -1469,6 +1478,14 @@ function OnlineRow({
         <div className="truncate text-[10px] uppercase tracking-wider text-muted">
           {roleLabel(user, roles)}
           {user.channelId ? ' · в канале' : ' · без канала'}
+          {' · '}
+          <DeviceBadge
+            device={user.device}
+            deviceName={user.deviceName}
+            compact
+            className="inline-block align-[-1px] text-muted"
+          />
+          <span className="normal-case"> {user.deviceName}</span>
         </div>
       </div>
       {busy && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
@@ -1518,7 +1535,11 @@ function OnlineRow({
               disabled={Boolean(busy)}
               onClick={() =>
                 onAction('kick', (callback) =>
-                  socket?.emit('mod:kick', { userId: user.id }, callback),
+                  socket?.emit(
+                    'mod:kick',
+                    { userId: user.id, sessionId: user.sessionId },
+                    callback,
+                  ),
                 )
               }
             >
@@ -1535,7 +1556,11 @@ function OnlineRow({
                 const channelId = event.target.value;
                 if (!channelId) return;
                 onAction('move', (callback) =>
-                  socket?.emit('mod:moveUser', { userId: user.id, channelId }, callback),
+                  socket?.emit(
+                    'mod:moveUser',
+                    { userId: user.id, sessionId: user.sessionId, channelId },
+                    callback,
+                  ),
                 );
               }}
             >
@@ -1651,6 +1676,7 @@ function AccountRow({
   canAssignRoles,
   canAssignBaseRole,
   canPromoteGuest,
+  canDelete,
   busy,
   onAction,
   onRolesSaved,
@@ -1663,6 +1689,7 @@ function AccountRow({
   canAssignRoles: boolean;
   canAssignBaseRole: boolean;
   canPromoteGuest: boolean;
+  canDelete: boolean;
   busy: boolean;
   onAction: (
     emit: (callback: (result: { ok: boolean; error?: string }) => void) => void,
@@ -1858,6 +1885,28 @@ function AccountRow({
                 <Ban className="h-4 w-4" />
               </button>
             ))}
+          {!self && canDelete && (
+            <button
+              className="icon-btn h-8 w-8 text-muted hover:bg-danger/15 hover:text-danger"
+              title="Удалить аккаунт навсегда"
+              disabled={Boolean(busy)}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `Удалить аккаунт ${account.displayName} (@${account.username}) навсегда? ` +
+                      'Пользователь будет отключён, а логин и имя освободятся для новой регистрации.',
+                  )
+                ) {
+                  return;
+                }
+                onAction((callback) =>
+                  socket?.emit('mod:deleteUser', { userId: account.id }, callback),
+                );
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 

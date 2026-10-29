@@ -16,14 +16,16 @@ import type { Store } from './store.js';
 import type { AppServer, AppSocket } from './types.js';
 
 interface ProducerMeta {
-  userId: string;
+  sessionId: string;
+  accountId: string;
   channelId: string;
   source: ProducerSource;
   kind: MediaKind;
 }
 
 interface Peer {
-  userId: string;
+  sessionId: string;
+  accountId: string;
   sendTransport?: mediasoup.types.WebRtcTransport;
   recvTransport?: mediasoup.types.WebRtcTransport;
   producers: Map<string, mediasoup.types.Producer>;
@@ -109,7 +111,7 @@ export class VoiceManager {
       for (const { producer, volume } of volumes) {
         const meta = this.producerMeta.get(producer.id);
         if (!meta || meta.source !== 'mic') continue;
-        speakers.push({ userId: meta.userId, volume });
+        speakers.push({ userId: meta.accountId, sessionId: meta.sessionId, volume });
       }
       this.io.emit('voice:activeSpeakers', speakers);
     });
@@ -150,32 +152,33 @@ export class VoiceManager {
     return transport;
   }
 
-  private getPeer(userId: string): Peer | undefined {
-    return this.peers.get(userId);
+  private getPeer(sessionId: string): Peer | undefined {
+    return this.peers.get(sessionId);
   }
 
-  private ensurePeer(userId: string): Peer {
-    let peer = this.peers.get(userId);
+  private ensurePeer(sessionId: string, accountId: string): Peer {
+    let peer = this.peers.get(sessionId);
     if (!peer) {
       peer = {
-        userId,
+        sessionId,
+        accountId,
         producers: new Map(),
         consumers: new Map(),
         ready: false,
         closed: false,
         syncChain: Promise.resolve(),
       };
-      this.peers.set(userId, peer);
+      this.peers.set(sessionId, peer);
     }
     return peer;
   }
 
-  async join(socket: AppSocket, userId: string, channelId: string): Promise<AckResult> {
+  async join(socket: AppSocket, sessionId: string, channelId: string): Promise<AckResult> {
     const channel = this.store.channelById(channelId);
     if (!channel || channel.type !== 'voice') {
       return { ok: false, error: 'Голосовой канал не найден' };
     }
-    const online = this.sessions.get(userId);
+    const online = this.sessions.get(sessionId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
     if (!isChannelVisible(online, channel)) {
       return { ok: false, error: 'Этот канал недоступен вам' };
@@ -183,16 +186,16 @@ export class VoiceManager {
     if (
       online.role !== 'admin' &&
       channel.passwordHash &&
-      !this.sessions.isChannelUnlocked(userId, channelId)
+      !this.sessions.isChannelUnlocked(online.id, channelId)
     ) {
       return { ok: false, error: 'Канал защищён паролем' };
     }
 
     if (online.channelId && online.channelId !== channelId) {
-      await this.leave(userId);
+      await this.leave(sessionId);
     }
 
-    const existing = this.getPeer(userId);
+    const existing = this.getPeer(sessionId);
     if (online.channelId === channelId && existing && !existing.closed && existing.sendTransport) {
       socket.emit('voice:transports', {
         send: transportParams(existing.sendTransport),
@@ -209,10 +212,10 @@ export class VoiceManager {
         };
       }
       // Резервируем место до создания транспортов, чтобы параллельные входы не превысили лимит.
-      this.ensurePeer(userId);
+      this.ensurePeer(sessionId, online.id);
     }
 
-    this.sessions.update(userId, {
+    this.sessions.update(sessionId, {
       channelId,
       broadcasting: false,
       broadcastAll: false,
@@ -220,7 +223,7 @@ export class VoiceManager {
       screenSharing: false,
     });
 
-    const peer = this.ensurePeer(userId);
+    const peer = this.ensurePeer(sessionId, online.id);
     peer.closed = false;
     peer.ready = false;
     peer.rtpCapabilities = undefined;
@@ -242,17 +245,17 @@ export class VoiceManager {
       return { ok: true };
     } catch (error) {
       console.error('[voice] failed to create transports', error);
-      await this.leave(userId);
+      await this.leave(sessionId);
       return { ok: false, error: 'Не удалось создать WebRTC-транспорт' };
     }
   }
 
   async connectTransport(
-    userId: string,
+    sessionId: string,
     direction: 'send' | 'recv',
     dtlsParameters: unknown,
   ): Promise<AckResult> {
-    const peer = this.getPeer(userId);
+    const peer = this.getPeer(sessionId);
     if (!peer) return { ok: false, error: 'Вы не в голосовом канале' };
     const transport = direction === 'send' ? peer.sendTransport : peer.recvTransport;
     if (!transport) return { ok: false, error: 'Транспорт не найден' };
@@ -267,8 +270,8 @@ export class VoiceManager {
     }
   }
 
-  async ready(userId: string, rtpCapabilities: unknown): Promise<AckResult> {
-    const peer = this.getPeer(userId);
+  async ready(sessionId: string, rtpCapabilities: unknown): Promise<AckResult> {
+    const peer = this.getPeer(sessionId);
     if (!peer || peer.closed) return { ok: false, error: 'Вы не в голосовом канале' };
     peer.rtpCapabilities = rtpCapabilities as mediasoup.types.RtpCapabilities;
     peer.ready = true;
@@ -277,13 +280,13 @@ export class VoiceManager {
   }
 
   async produce(
-    userId: string,
+    sessionId: string,
     kind: MediaKind,
     rtpParameters: unknown,
     source: ProducerSource,
   ): Promise<{ id?: string; error?: string }> {
-    const peer = this.getPeer(userId);
-    const online = this.sessions.get(userId);
+    const peer = this.getPeer(sessionId);
+    const online = this.sessions.get(sessionId);
     if (!peer || !online?.channelId || peer.closed || !peer.sendTransport) {
       return { error: 'Вы не в голосовом канале' };
     }
@@ -295,9 +298,9 @@ export class VoiceManager {
     }
 
     try {
-      // один микрофон и одна демонстрация на пользователя
+      // один микрофон и одна демонстрация на устройство
       for (const [producerId, meta] of this.producerMeta) {
-        if (meta.userId === userId && meta.source === source) {
+        if (meta.sessionId === sessionId && meta.source === source) {
           await this.removeProducer(producerId);
         }
       }
@@ -309,7 +312,8 @@ export class VoiceManager {
       });
 
       const meta: ProducerMeta = {
-        userId,
+        sessionId,
+        accountId: online.id,
         channelId: online.channelId,
         source,
         kind,
@@ -322,7 +326,7 @@ export class VoiceManager {
         await this.observer.addProducer({ producerId: producer.id }).catch(() => undefined);
         if (online.serverMuted) await producer.pause().catch(() => undefined);
       } else {
-        this.sessions.update(userId, { screenSharing: true });
+        this.sessions.update(sessionId, { screenSharing: true });
       }
 
       producer.on('transportclose', () => {
@@ -343,9 +347,9 @@ export class VoiceManager {
     }
   }
 
-  async closeProducer(userId: string, producerId: string): Promise<void> {
+  async closeProducer(sessionId: string, producerId: string): Promise<void> {
     const meta = this.producerMeta.get(producerId);
-    if (!meta || meta.userId !== userId) return;
+    if (!meta || meta.sessionId !== sessionId) return;
     await this.removeProducer(producerId);
     this.reconcileAll();
   }
@@ -356,7 +360,7 @@ export class VoiceManager {
     this.producers.delete(producerId);
     this.producerMeta.delete(producerId);
     if (producer) {
-      const peer = this.getPeer(meta?.userId ?? '');
+      const peer = this.getPeer(meta?.sessionId ?? '');
       peer?.producers.delete(producerId);
       try {
         await this.observer.removeProducer({ producerId });
@@ -370,15 +374,15 @@ export class VoiceManager {
       }
     }
     if (meta?.source === 'screen') {
-      this.sessions.update(meta.userId, { screenSharing: false });
+      this.sessions.update(meta.sessionId, { screenSharing: false });
     }
   }
 
   async setBroadcast(
-    userId: string,
+    sessionId: string,
     targets: { all: boolean; groupIds: string[] },
   ): Promise<AckResult> {
-    const online = this.sessions.get(userId);
+    const online = this.sessions.get(sessionId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
     if (!hasPermission(online, this.store.roles(), 'broadcast')) {
       return { ok: false, error: 'Недостаточно прав для вещания во все каналы' };
@@ -397,14 +401,14 @@ export class VoiceManager {
         return { ok: false, error: 'Сначала войдите в голосовой канал с микрофоном' };
       }
       const hasMic = [...this.producerMeta.values()].some(
-        (meta) => meta.userId === userId && meta.source === 'mic',
+        (meta) => meta.sessionId === sessionId && meta.source === 'mic',
       );
       if (!hasMic) {
         return { ok: false, error: 'Микрофон не активен — включите его и попробуйте снова' };
       }
     }
 
-    this.sessions.update(userId, {
+    this.sessions.update(sessionId, {
       broadcasting: enabled,
       broadcastAll: all,
       broadcastGroupIds: groupIds,
@@ -421,7 +425,7 @@ export class VoiceManager {
       if (!user.broadcastGroupIds.some((id) => !knownGroups.has(id))) continue;
       const groupIds = user.broadcastGroupIds.filter((id) => knownGroups.has(id));
       this.sessions.update(
-        user.id,
+        user.sessionId,
         {
           broadcastGroupIds: groupIds,
           broadcasting: user.broadcastAll || groupIds.length > 0,
@@ -442,7 +446,7 @@ export class VoiceManager {
       if (!user.broadcasting) continue;
       if (hasPermission(user, roles, 'broadcast')) continue;
       this.sessions.update(
-        user.id,
+        user.sessionId,
         { broadcasting: false, broadcastAll: false, broadcastGroupIds: [] },
         false,
       );
@@ -452,12 +456,12 @@ export class VoiceManager {
     this.reconcileAll();
   }
 
+  // Серверный мут блокирует микрофон аккаунта на всех его устройствах.
   async applyServerMute(userId: string, muted: boolean): Promise<void> {
-    const online = this.sessions.get(userId);
-    if (!online) return;
-    this.sessions.update(userId, { serverMuted: muted });
+    if (!this.sessions.hasAccount(userId)) return;
+    this.sessions.updateAccount(userId, { serverMuted: muted });
     for (const [producerId, meta] of this.producerMeta) {
-      if (meta.userId !== userId || meta.source !== 'mic') continue;
+      if (meta.accountId !== userId || meta.source !== 'mic') continue;
       const producer = this.producers.get(producerId);
       if (!producer) continue;
       try {
@@ -469,22 +473,23 @@ export class VoiceManager {
     }
   }
 
-  async kick(userId: string, byName: string): Promise<void> {
-    const online = this.sessions.get(userId);
-    const channel = online?.channelId ? this.store.channelById(online.channelId) : undefined;
-    await this.leave(userId);
-    this.sessions.getSocket(userId)?.emit('voice:kicked', {
+  async kick(sessionId: string, byName: string): Promise<void> {
+    const online = this.sessions.get(sessionId);
+    if (!online?.channelId) return;
+    const channel = this.store.channelById(online.channelId);
+    await this.leave(sessionId);
+    this.sessions.getSocket(sessionId)?.emit('voice:kicked', {
       channelName: channel?.name ?? 'канал',
       byName,
     });
   }
 
-  async leave(userId: string): Promise<void> {
-    const peer = this.peers.get(userId);
-    const online = this.sessions.get(userId);
+  async leave(sessionId: string): Promise<void> {
+    const peer = this.peers.get(sessionId);
+    const online = this.sessions.get(sessionId);
     if (online) {
       this.sessions.update(
-        userId,
+        sessionId,
         {
           channelId: null,
           broadcasting: false,
@@ -501,9 +506,9 @@ export class VoiceManager {
     }
 
     peer.closed = true;
-    this.peers.delete(userId);
+    this.peers.delete(sessionId);
 
-    const socket = this.sessions.getSocket(userId);
+    const socket = this.sessions.getSocket(sessionId);
     for (const [producerId, consumer] of peer.consumers) {
       peer.consumers.delete(producerId);
       try {
@@ -529,8 +534,8 @@ export class VoiceManager {
     this.reconcileAll();
   }
 
-  disconnectUser(userId: string): Promise<void> {
-    return this.leave(userId);
+  disconnectSession(sessionId: string): Promise<void> {
+    return this.leave(sessionId);
   }
 
   private scheduleSync(peer: Peer): void {
@@ -559,22 +564,23 @@ export class VoiceManager {
 
   private async syncPeer(peer: Peer): Promise<void> {
     if (peer.closed) return;
-    const online = this.sessions.get(peer.userId);
+    const online = this.sessions.get(peer.sessionId);
     if (!online?.channelId) return;
 
     const desired = new Set<string>();
     for (const [producerId, meta] of this.producerMeta) {
-      if (meta.userId === peer.userId) continue;
+      // свои же устройства не слышим, чтобы не было эха
+      if (meta.sessionId === peer.sessionId || meta.accountId === peer.accountId) continue;
       if (meta.channelId === online.channelId) {
         desired.add(producerId);
         continue;
       }
-      const speaker = this.sessions.get(meta.userId);
+      const speaker = this.sessions.get(meta.sessionId);
       // вещание администратора слышно во всех каналах или только выбранным группам
       if (
         meta.source === 'mic' &&
         speaker?.broadcasting &&
-        this.isBroadcastAudience(peer.userId, speaker)
+        this.isBroadcastAudience(peer.accountId, speaker)
       ) {
         desired.add(producerId);
       }
@@ -604,7 +610,7 @@ export class VoiceManager {
     const meta = this.producerMeta.get(producer.id);
     if (!meta) return;
     if (!this.router.canConsume({ producerId: producer.id, rtpCapabilities: peer.rtpCapabilities })) {
-      console.warn(`[voice] user ${peer.userId} cannot consume producer ${producer.id}`);
+      console.warn(`[voice] session ${peer.sessionId} cannot consume producer ${producer.id}`);
       return;
     }
 
@@ -623,20 +629,21 @@ export class VoiceManager {
       const payload: ConsumerParams = {
         consumerId: consumer.id,
         producerId: producer.id,
-        userId: meta.userId,
+        userId: meta.accountId,
+        sessionId: meta.sessionId,
         kind: consumer.kind,
         source: meta.source,
         rtpParameters: consumer.rtpParameters,
-        serverMuted: this.sessions.get(meta.userId)?.serverMuted ?? false,
+        serverMuted: this.sessions.get(meta.sessionId)?.serverMuted ?? false,
       };
-      this.sessions.getSocket(peer.userId)?.emit('voice:newConsumer', payload);
+      this.sessions.getSocket(peer.sessionId)?.emit('voice:newConsumer', payload);
     } catch (error) {
       if (!peer.closed) console.error('[voice] createConsumer failed', error);
     }
   }
 
-  async resumeConsumer(userId: string, consumerId: string): Promise<AckResult> {
-    const peer = this.getPeer(userId);
+  async resumeConsumer(sessionId: string, consumerId: string): Promise<AckResult> {
+    const peer = this.getPeer(sessionId);
     if (!peer || peer.closed) return { ok: false, error: 'Вы не в голосовом канале' };
     for (const consumer of peer.consumers.values()) {
       if (consumer.id !== consumerId) continue;
@@ -660,7 +667,7 @@ export class VoiceManager {
     } catch {
       /* closed */
     }
-    this.sessions.getSocket(peer.userId)?.emit('voice:consumerClosed', {
+    this.sessions.getSocket(peer.sessionId)?.emit('voice:consumerClosed', {
       consumerId: consumer.id,
     });
   }
@@ -670,8 +677,8 @@ export class VoiceManager {
   }
 
   async close(): Promise<void> {
-    for (const userId of [...this.peers.keys()]) {
-      await this.leave(userId).catch(() => undefined);
+    for (const sessionId of [...this.peers.keys()]) {
+      await this.leave(sessionId).catch(() => undefined);
     }
     try {
       await this.worker?.close();

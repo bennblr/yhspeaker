@@ -78,6 +78,11 @@ export class StatsRecorder {
     this.lastSampleAt = now;
 
     const online = this.sessions.list();
+    // Считаем людей, а не подключения: несколько устройств — один человек.
+    const unique = new Map<string, (typeof online)[number]>();
+    for (const user of online) {
+      if (!unique.has(user.id)) unique.set(user.id, user);
+    }
     const day = this.ensureDay(now);
     const bucketT = Math.floor(now / STATS_BUCKET_MS) * STATS_BUCKET_MS;
     let bucket = day.buckets.find((item) => item.t === bucketT);
@@ -85,12 +90,12 @@ export class StatsRecorder {
       bucket = { t: bucketT, sum: 0, samples: 0, peak: 0 };
       day.buckets.push(bucket);
     }
-    bucket.sum += online.length;
+    bucket.sum += unique.size;
     bucket.samples += 1;
-    bucket.peak = Math.max(bucket.peak, online.length);
+    bucket.peak = Math.max(bucket.peak, unique.size);
 
     const current = new Set<string>();
-    for (const user of online) {
+    for (const user of unique.values()) {
       current.add(user.id);
       const entry = (day.users[user.id] ??= {
         userId: user.id,

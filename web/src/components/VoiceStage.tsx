@@ -27,6 +27,7 @@ import {
   type Role,
 } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
@@ -157,6 +158,7 @@ function ModeratorMenu({
             {user.displayName}
           </span>
           <LabelBadge label={user.label} />
+          <DeviceBadge device={user.device} deviceName={user.deviceName} className="ml-auto" />
         </div>
         <div className="my-1 h-px bg-line" />
         <button
@@ -202,7 +204,11 @@ function ModeratorMenu({
                 const channelId = event.target.value;
                 if (!channelId) return;
                 run((callback) =>
-                  socket.emit('mod:moveUser', { userId: user.id, channelId }, callback),
+                  socket.emit(
+                    'mod:moveUser',
+                    { userId: user.id, sessionId: user.sessionId, channelId },
+                    callback,
+                  ),
                 );
               }}
             >
@@ -219,7 +225,9 @@ function ModeratorMenu({
           <button
             className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
             onClick={() =>
-              run((callback) => socket.emit('mod:kick', { userId: user.id }, callback))
+              run((callback) =>
+                socket.emit('mod:kick', { userId: user.id, sessionId: user.sessionId }, callback),
+              )
             }
           >
             <LogOut className="h-3.5 w-3.5 text-warn" />
@@ -415,6 +423,9 @@ function ParticipantTile({
           )}
           {roleLabel(user, roles)}
         </div>
+        <div className="mt-1 flex justify-center">
+          <DeviceBadge device={user.device} deviceName={user.deviceName} />
+        </div>
       </div>
 
       <div className="flex items-center gap-1.5 text-muted">
@@ -529,16 +540,16 @@ export function VoiceStage({ channel }: { channel: Channel }) {
     ...(localScreen
       ? [
           {
-            userId: me?.id ?? 'self',
+            sessionId: me?.sessionId ?? 'self',
             name: 'Ваш экран',
             stream: localScreen,
             local: true,
           },
         ]
       : []),
-    ...Object.entries(screens).map(([userId, stream]) => ({
-      userId,
-      name: users.find((user) => user.id === userId)?.displayName ?? 'Участник',
+    ...Object.entries(screens).map(([sessionId, stream]) => ({
+      sessionId,
+      name: users.find((user) => user.sessionId === sessionId)?.displayName ?? 'Участник',
       stream,
       local: false,
     })),
@@ -555,7 +566,7 @@ export function VoiceStage({ channel }: { channel: Channel }) {
           <div className="flex gap-3 overflow-x-auto pb-1">
             {screenCards.map((card) => (
               <div
-                key={card.userId}
+                key={card.sessionId}
                 className="group relative w-[300px] shrink-0 overflow-hidden rounded-xl border border-line bg-black/50"
               >
                 <div className="aspect-video">
@@ -573,7 +584,7 @@ export function VoiceStage({ channel }: { channel: Channel }) {
                   ) : (
                     <button
                       className="rounded-md bg-accent/90 px-2 py-1 text-[10px] font-medium text-white hover:bg-accent"
-                      onClick={() => openScreenViewer(card.userId)}
+                      onClick={() => openScreenViewer(card.sessionId)}
                     >
                       Смотреть
                     </button>
@@ -603,11 +614,12 @@ export function VoiceStage({ channel }: { channel: Channel }) {
             <div className="relative flex flex-wrap justify-center gap-2">
               {channelUsers.map((user) => (
                 <div
-                  key={user.id}
+                  key={user.sessionId}
                   className="flex items-center gap-2 rounded-full border border-line bg-panel/80 py-1 pl-1 pr-3"
                 >
                   <Avatar id={user.id} name={user.displayName} size="xs" />
                   <span className="text-xs text-slate-300">{user.displayName}</span>
+                  <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
                 </div>
               ))}
             </div>
@@ -656,10 +668,10 @@ export function VoiceStage({ channel }: { channel: Channel }) {
           <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
             {channelUsers.map((user) => (
               <ParticipantTile
-                key={user.id}
+                key={user.sessionId}
                 user={user}
-                speaking={speakingSet.has(user.id)}
-                isSelf={user.id === me?.id}
+                speaking={speakingSet.has(user.sessionId)}
+                isSelf={user.sessionId === me?.sessionId}
                 canModerate={canModerate}
               />
             ))}

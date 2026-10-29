@@ -13,11 +13,13 @@ import { DesktopTitleBar } from './components/DesktopTitleBar';
 import { api, type PublicServerConfig } from './lib/api';
 import { useApp } from './lib/store';
 import { connectSocket, getSocket } from './lib/socket';
+import { describeDevice } from './lib/device';
 import { voice } from './lib/voice';
 import { logout, toast, toggleBroadcastAll, toggleBroadcastGroup } from './lib/actions';
 import { desktop } from './lib/desktop';
 import { isGlobalAccelerator, matchesPttKey, matchesPttRelease } from './lib/settings';
 import { cn, isTypingTarget, serverLabel } from './lib/utils';
+import { currentServerUrl, rememberServer } from './lib/servers';
 import { hasPermission } from '@tsds/shared';
 
 function Splash({ offline }: { offline: boolean }) {
@@ -75,6 +77,7 @@ export function App() {
   const unlockedChannels = useApp((state) => state.unlockedChannels);
   const settings = useApp((state) => state.settings);
   const voiceChannelId = useApp((state) => state.voice.channelId);
+  const voiceState = useApp((state) => state.voice);
   const appConfig = useApp((state) => state.config);
   const roles = useApp((state) => state.roles);
   const broadcastGroups = useApp((state) => state.broadcastGroups);
@@ -124,7 +127,7 @@ export function App() {
 
   useEffect(() => {
     if (!token) return;
-    const socket = connectSocket(token);
+    const socket = connectSocket(token, describeDevice());
     voice.attach(socket);
     useApp.getState().setConnection('connecting');
 
@@ -196,7 +199,7 @@ export function App() {
     });
 
     socket.on('voice:activeSpeakers', (speakers) => {
-      useApp.getState().setSpeaking(speakers.map((speaker) => speaker.userId));
+      useApp.getState().setSpeaking(speakers.map((speaker) => speaker.sessionId));
     });
 
     socket.on('voice:kicked', ({ channelName, byName }) => {
@@ -257,15 +260,17 @@ export function App() {
   }, [me]);
 
   useEffect(() => {
-    if (settings.mode !== 'ptt' || !voiceChannelId) return;
+    if (settings.mode === 'open' || !voiceChannelId) return;
 
     const down = (event: KeyboardEvent) => {
       if (event.repeat || isTypingTarget(event.target)) return;
       if (!matchesPttKey(event, settings.pttKey)) return;
       event.preventDefault();
-      voice.setPtt(true);
+      if (settings.mode === 'toggle') voice.toggleMicByKey();
+      else voice.setPtt(true);
     };
     const up = (event: KeyboardEvent) => {
+      if (settings.mode !== 'ptt') return;
       if (!matchesPttRelease(event, settings.pttKey)) return;
       voice.setPtt(false);
     };
@@ -287,7 +292,8 @@ export function App() {
   useEffect(() => {
     if (!desktop) return;
     void desktop.setPttKey(settings.pttKey);
-  }, [settings.pttKey]);
+    void desktop.setMicMode(settings.mode);
+  }, [settings.pttKey, settings.mode]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -297,6 +303,42 @@ export function App() {
       voice.setPtt(down);
     });
   }, []);
+
+  useEffect(() => {
+    if (!desktop) return;
+    return desktop.onMicToggle(() => voice.toggleMicByKey());
+  }, []);
+
+  const voiceChannelName = channels.find((item) => item.id === voiceChannelId)?.name ?? '';
+
+  useEffect(() => {
+    if (!desktop) return;
+    const serverMuted = Boolean(me?.serverMuted);
+    const micOn =
+      Boolean(voiceChannelId) &&
+      voiceState.micReady &&
+      !voiceState.muted &&
+      !voiceState.deafened &&
+      !serverMuted &&
+      (settings.mode !== 'ptt' || voiceState.pttActive);
+    desktop.setMicState({
+      inCall: Boolean(voiceChannelId),
+      on: micOn,
+      muted: voiceState.muted || voiceState.deafened || serverMuted,
+      broadcasting: Boolean(me?.broadcasting),
+      channelName: voiceChannelName,
+    });
+  }, [
+    voiceChannelId,
+    voiceChannelName,
+    voiceState.micReady,
+    voiceState.muted,
+    voiceState.deafened,
+    voiceState.pttActive,
+    me?.serverMuted,
+    me?.broadcasting,
+    settings.mode,
+  ]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -384,6 +426,15 @@ export function App() {
     window.addEventListener('pointerdown', unlock);
     return () => window.removeEventListener('pointerdown', unlock);
   }, []);
+
+  const configName = serverConfig?.serverName?.trim() ?? '';
+  useEffect(() => {
+    if (!serverConfig) return;
+    const label = serverLabel(configName);
+    const entryName = label !== 'LA2Speak' ? label : '';
+    rememberServer(currentServerUrl(), entryName);
+    if (desktop) void desktop.setServerName(entryName);
+  }, [serverConfig, configName]);
 
   if (!token) {
     const serverName = serverLabel(serverConfig?.serverName);

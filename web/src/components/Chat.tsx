@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MessageSquare, Send, Shield, ShieldCheck, Trash2 } from 'lucide-react';
 import type { ChatMessage } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { ChatText } from './ChatText';
 import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
 import { sendChatMessage } from '../lib/actions';
@@ -161,9 +162,7 @@ export function Chat({ channelId, placeholder }: { channelId: string; placeholde
                           <span className="text-[10px] text-muted">{formatTime(message.ts)}</span>
                         </div>
                       )}
-                      <p className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-slate-300">
-                        {message.text}
-                      </p>
+                      <ChatText text={message.text} />
                     </div>
                     {canModerate && (
                       <button

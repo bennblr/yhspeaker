@@ -292,6 +292,17 @@ export class Store {
     return user;
   }
 
+  deleteUser(id: string): boolean {
+    const before = this.data.users.length;
+    this.data.users = this.data.users.filter((u) => u.id !== id);
+    if (this.data.users.length === before) return false;
+    for (const group of this.data.broadcastGroups) {
+      group.memberIds = group.memberIds.filter((memberId) => memberId !== id);
+    }
+    this.saveNow();
+    return true;
+  }
+
   countAdmins(): number {
     return this.data.users.filter((u) => u.role === 'admin' && !u.banned).length;
   }

@@ -8,7 +8,9 @@ import {
   Mic,
   MicOff,
   Radio,
+  Plus,
   RefreshCw,
+  Server,
   Shield,
   ShieldCheck,
   UserRound,
@@ -33,6 +35,15 @@ import {
 import { applyMicGate, createMicGateNode, createNoiseFilter } from '../lib/micGate';
 import { useCan } from '../lib/roles';
 import { desktop } from '../lib/desktop';
+import {
+  currentServerUrl,
+  forgetServer,
+  listKnownServers,
+  normalizeServerUrl,
+  rememberServer,
+  serverHost,
+  type KnownServer,
+} from '../lib/servers';
 import { cn } from '../lib/utils';
 
 function Toggle({
@@ -253,6 +264,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [nickname, setNickname] = useState('');
   const [nicknameBusy, setNicknameBusy] = useState(false);
   const [nicknameError, setNicknameError] = useState<string | null>(null);
+  const [serverList, setServerList] = useState<KnownServer[]>([]);
+  const [serverInput, setServerInput] = useState('');
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const testStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const testGateRef = useRef<AudioWorkletNode | null>(null);
@@ -429,6 +444,60 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     setNicknameBusy(false);
   }, [open, me?.displayName]);
 
+  useEffect(() => {
+    if (!open) return;
+    setServerList(listKnownServers());
+    setServerInput('');
+    setServerError(null);
+    setSwitchingTo(null);
+  }, [open]);
+
+  function refreshServers(): void {
+    setServerList(listKnownServers());
+  }
+
+  function openServer(url: string): void {
+    if (switchingTo) return;
+    if (url === currentServerUrl()) {
+      setServerError('Вы уже на этом сервере.');
+      return;
+    }
+    setServerError(null);
+    rememberServer(url);
+    if (desktop) {
+      setSwitchingTo(url);
+      void desktop
+        .switchServer(url)
+        .then((result) => {
+          setSwitchingTo(null);
+          if (!result.ok) setServerError(result.error ?? 'Не удалось переключиться на сервер.');
+        })
+        .catch(() => {
+          setSwitchingTo(null);
+          setServerError('Не удалось переключиться на сервер.');
+        });
+      return;
+    }
+    window.location.assign(url);
+  }
+
+  function addServer(): void {
+    const url = normalizeServerUrl(serverInput);
+    if (!url) {
+      setServerError('Введите адрес, например chat.la2speak.com');
+      return;
+    }
+    rememberServer(url);
+    setServerInput('');
+    setServerError(null);
+    refreshServers();
+  }
+
+  function removeServer(url: string): void {
+    forgetServer(url);
+    refreshServers();
+  }
+
   async function saveNickname(): Promise<void> {
     if (!token || !me || nicknameBusy) return;
     const value = nickname.trim();
@@ -458,11 +527,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   }
 
   const pttOptions = PTT_OPTIONS;
+  const keyAction =
+    settings.mode === 'ptt'
+      ? 'Клавишу нужно удерживать — передача идёт, пока она нажата.'
+      : settings.mode === 'toggle'
+        ? 'Нажатие включает микрофон, повторное нажатие выключает.'
+        : 'Клавиша не используется: микрофон передаёт постоянно.';
   const globalHint = desktop
     ? isGlobalAccelerator(settings.pttKey)
-      ? 'Сочетание работает глобально, даже когда окно свёрнуто.'
-      : 'Одиночная клавиша работает только при активном окне. Выберите сочетание для глобального режима.'
-    : 'В браузере push-to-talk работает, когда вкладка активна. В приложении для Windows доступны глобальные сочетания.';
+      ? 'Сочетание работает глобально — даже когда окно свёрнуто или активно другое приложение.'
+      : 'Одиночная клавиша работает только при активном окне. Выберите сочетание (например Alt + V) или F8, чтобы клавиша работала в свёрнутом приложении.'
+    : 'В браузере клавиша работает, когда вкладка активна. В приложении для Windows клавиша работает глобально.';
+  const keyHint = `${keyAction} ${globalHint}`;
 
   const threshold = sensitivityThreshold(settings.micSensitivity);
   const thresholdPercent = Math.min(99, Math.max(1, micLevelPercent(threshold)));
@@ -492,7 +568,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const hotkeyWarning = (targetId: string, value: string): string | null => {
     if (!value) return null;
     if (value === settings.pttKey) {
-      return 'Клавиша занята Push-to-talk — для вещания она не сработает.';
+      return 'Клавиша занята клавишей микрофона — для вещания она не сработает.';
     }
     if (broadcastTargets.some((target) => target.id !== targetId && target.value === value)) {
       return 'Клавиша уже назначена другой цели — сработает только первое назначение.';
@@ -586,6 +662,96 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </Section>
         )}
 
+        <Section icon={Server} title="Серверы">
+          <div className="space-y-3">
+            <p className="text-[11px] leading-relaxed text-muted">
+              Все серверы, на которых вы уже были. Вход на каждом сохраняется отдельно — вернувшись,
+              вы останетесь авторизованы.
+              {desktop
+                ? ' В приложении список также доступен в шапке окна кнопкой «Сервер».'
+                : ' Этот список хранится в браузере; на другом устройстве войдите на сервер один раз — аккаунт общий.'}
+            </p>
+
+            {serverList.length > 0 && (
+              <div className="space-y-1.5">
+                {serverList.map((server) => (
+                  <div
+                    key={server.url}
+                    className={cn(
+                      'flex items-center gap-2.5 rounded-lg border px-3 py-2',
+                      server.current ? 'border-ok/30 bg-ok/5' : 'border-line bg-panel',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                        server.current ? 'bg-ok' : 'bg-accent/70',
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-slate-200">
+                        {server.name || serverHost(server.url)}
+                      </div>
+                      {server.name && (
+                        <div className="truncate text-[10px] text-muted">
+                          {serverHost(server.url)}
+                        </div>
+                      )}
+                    </div>
+                    {server.current ? (
+                      <span className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wider text-ok">
+                        <Check className="h-3 w-3" />
+                        текущий
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          className="btn-ghost h-7 shrink-0 px-2.5 text-xs"
+                          disabled={Boolean(switchingTo)}
+                          onClick={() => openServer(server.url)}
+                        >
+                          {switchingTo === server.url ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : null}
+                          Открыть
+                        </button>
+                        <button
+                          className="icon-btn h-7 w-7 shrink-0 text-muted hover:text-danger"
+                          title="Убрать из списка"
+                          onClick={() => removeServer(server.url)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                className="input flex-1"
+                value={serverInput}
+                onChange={(event) => {
+                  setServerInput(event.target.value);
+                  setServerError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') addServer();
+                }}
+                placeholder="chat.la2speak.com"
+                spellCheck={false}
+              />
+              <button className="btn-ghost h-[42px] shrink-0 px-3" onClick={addServer}>
+                <Plus className="h-4 w-4" />
+                Добавить
+              </button>
+            </div>
+            {serverError && <p className="text-[11px] text-danger">{serverError}</p>}
+          </div>
+        </Section>
+
         <Section icon={Mic} title="Микрофон">
           <div className="space-y-4">
             <div>
@@ -605,12 +771,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   <select
                     className="input appearance-none pr-9"
                     value={settings.mode}
-                    onChange={(event) =>
-                      updateSettings({ mode: event.target.value === 'ptt' ? 'ptt' : 'open' })
-                    }
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      updateSettings({
+                        mode: value === 'ptt' ? 'ptt' : value === 'toggle' ? 'toggle' : 'open',
+                      });
+                    }}
                   >
                     <option value="open">Открытый микрофон</option>
-                    <option value="ptt">Push-to-talk</option>
+                    <option value="ptt">Push-to-talk (удерживать)</option>
+                    <option value="toggle">По кнопке (вкл/выкл)</option>
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                 </div>
@@ -703,10 +873,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   />
                   <span className={gateOpen ? 'text-ok' : 'text-muted'}>
                     {settings.mode === 'ptt'
-                      ? 'Push-to-talk: передача по клавише'
-                      : gateOpen
-                        ? 'Сигнал проходит'
-                        : 'Тише порога — микрофон не передаёт'}
+                      ? 'Push-to-talk: передача, пока клавиша зажата'
+                      : settings.mode === 'toggle'
+                        ? 'По кнопке: клавиша включает и выключает микрофон'
+                        : gateOpen
+                          ? 'Сигнал проходит'
+                          : 'Тише порога — микрофон не передаёт'}
                   </span>
                   <span className="text-muted">· оранжевая риска — порог</span>
                 </p>
@@ -772,7 +944,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </Section>
 
-        <Section icon={Keyboard} title="Push-to-talk">
+        <Section icon={Keyboard} title="Клавиша микрофона">
           <div className="space-y-3">
             <div>
               <label className="label">Клавиша</label>
@@ -791,11 +963,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
               </div>
             </div>
-            <p className="text-[11px] leading-relaxed text-muted">{globalHint}</p>
-            {settings.mode !== 'ptt' && (
+            <p className="text-[11px] leading-relaxed text-muted">{keyHint}</p>
+            {desktop && (
+              <p className="text-[11px] leading-relaxed text-muted">
+                Состояние микрофона видно на иконке в системном трее: серая — не в канале,
+                зелёная — передаёт, красная с чертой — выключен. Щелчок по иконке открывает
+                приложение, в меню иконки можно переключить микрофон.
+              </p>
+            )}
+            {settings.mode === 'open' && (
               <p className="rounded-lg border border-warn/20 bg-warn/5 px-3 py-2 text-[11px] text-warn">
-                Сейчас включён открытый микрофон. Выберите режим «Push-to-talk» выше, чтобы
-                использовать клавишу.
+                Сейчас включён открытый микрофон. Выберите режим «Push-to-talk» или «По кнопке»
+                выше, чтобы управлять микрофоном клавишей.
               </p>
             )}
           </div>

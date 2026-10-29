@@ -1,4 +1,4 @@
-export type PttMode = 'open' | 'ptt';
+export type PttMode = 'open' | 'ptt' | 'toggle';
 
 export interface BroadcastKeys {
   all: string;
@@ -25,6 +25,7 @@ export const PTT_OPTIONS = [
   { value: 'Space', label: 'Пробел', hint: 'когда окно активно' },
   { value: 'Alt+V', label: 'Alt + V', hint: 'глобально в приложении' },
   { value: 'Control+Space', label: 'Ctrl + Space', hint: 'глобально в приложении' },
+  { value: 'F8', label: 'F8', hint: 'глобально в приложении' },
 ];
 
 const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'] as const;
@@ -222,7 +223,8 @@ export function loadSettings(): MicSettings {
       inputGain: clamp(Number(parsed.inputGain ?? 1), 0, 2),
       micSensitivity: clamp(Number(parsed.micSensitivity ?? 65), 0, 100),
       outputVolume: clamp(Number(parsed.outputVolume ?? 1), 0, 1),
-      mode: parsed.mode === 'ptt' ? 'ptt' : 'open',
+      mode:
+        parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'open',
       pttKey: PTT_OPTIONS.some((option) => option.value === parsed.pttKey)
         ? (parsed.pttKey as string)
         : DEFAULT_SETTINGS.pttKey,

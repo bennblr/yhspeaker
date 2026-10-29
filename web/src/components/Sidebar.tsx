@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 import { Avatar } from './Avatar';
+import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
 import { useApp } from '../lib/store';
@@ -41,6 +42,7 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
       >
         {user.displayName}
       </span>
+      <DeviceBadge device={user.device} deviceName={user.deviceName} />
       <LabelBadge label={user.label} />
       {user.role === 'admin' && (
         <span title="Администратор" className="shrink-0">
@@ -83,11 +85,11 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
     <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-0.5">
       {users.map((user) => {
         const primary = user.role === 'member' ? primaryRole(user, roles) : null;
-        const isSpeaking = speaking.has(user.id);
+        const isSpeaking = speaking.has(user.sessionId);
         const localMuted = localMutedIds.includes(user.id);
         return (
           <span
-            key={user.id}
+            key={user.sessionId}
             title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
             className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-panel2/70 py-0.5 pl-0.5 pr-1.5 text-[11px] text-slate-300"
           >
@@ -103,6 +105,7 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
               {user.displayName}
             </span>
             <LabelBadge label={user.label} />
+            <DeviceBadge device={user.device} deviceName={user.deviceName} compact />
             {localMuted && <VolumeX className="h-3 w-3 shrink-0 text-danger/80" />}
             {user.broadcasting && <Radio className="h-3 w-3 shrink-0 text-ok" />}
             {user.screenSharing && <MonitorUp className="h-3 w-3 shrink-0 text-accent" />}
@@ -181,7 +184,11 @@ function ChannelRow({
         <>
           <div className="mb-1 hidden space-y-0.5 md:block">
             {users.map((user) => (
-              <ParticipantRow key={user.id} user={user} speaking={speaking.has(user.id)} />
+              <ParticipantRow
+                key={user.sessionId}
+                user={user}
+                speaking={speaking.has(user.sessionId)}
+              />
             ))}
           </div>
           <div className="md:hidden">

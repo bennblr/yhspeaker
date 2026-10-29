@@ -346,6 +346,80 @@
         color: #5c657a;
         letter-spacing: 0.04em;
       }
+
+      .recent {
+        margin-bottom: 20px;
+      }
+
+      .recent-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 190px;
+        overflow-y: auto;
+      }
+
+      .recent-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        text-align: left;
+      }
+
+      .recent-item:hover {
+        background: var(--panel2);
+        border-color: rgba(108, 124, 255, 0.5);
+      }
+
+      .recent-item .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex-shrink: 0;
+      }
+
+      .recent-item .dot.current {
+        background: var(--ok);
+        box-shadow: 0 0 8px rgba(61, 220, 151, 0.8);
+      }
+
+      .recent-item .text {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .recent-item .name {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .recent-item .host {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .recent-item .badge {
+        font-size: 9.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ok);
+        flex-shrink: 0;
+      }
     </style>
   </head>
   <body>
@@ -394,6 +468,11 @@
         Введите адрес вашего сервера LA2Speak. Один сервер — и веб-клиент, и это приложение
         используют одни и те же каналы, чат и аккаунты.
       </p>
+
+      <div id="recent" class="recent" hidden>
+        <label>Недавние серверы</label>
+        <div id="recent-list" class="recent-list"></div>
+      </div>
 
       <form id="form">
         <label for="server">Адрес сервера</label>

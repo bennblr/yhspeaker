@@ -26,8 +26,9 @@ export interface VoiceState {
   pttActive: boolean;
   micReady: boolean;
   localScreen: MediaStream | null;
+  // Ключи — идентификаторы подключений: у одного аккаунта может быть несколько устройств.
   remoteScreens: Record<string, MediaStream>;
-  viewerUserId: string | null;
+  viewerSessionId: string | null;
 }
 
 export interface ChannelLock {
@@ -76,8 +77,8 @@ export interface AppState {
   setSettings: (patch: Partial<MicSettings>) => void;
   patchVoice: (patch: Partial<VoiceState>) => void;
   setLocalScreen: (stream: MediaStream | null) => void;
-  setRemoteScreen: (userId: string, stream: MediaStream | null) => void;
-  setViewer: (userId: string | null) => void;
+  setRemoteScreen: (sessionId: string, stream: MediaStream | null) => void;
+  setViewer: (sessionId: string | null) => void;
   pushToast: (type: ToastType, text: string) => void;
   dismissToast: (id: number) => void;
   logoutLocal: () => void;
@@ -139,7 +140,7 @@ export const useApp = create<AppState>((set, get) => ({
     micReady: false,
     localScreen: null,
     remoteScreens: {},
-    viewerUserId: null,
+    viewerSessionId: null,
   },
   toasts: [],
 
@@ -160,7 +161,7 @@ export const useApp = create<AppState>((set, get) => ({
     );
     if (activeChannelId) localStorage.setItem('la2speak.lastChannel', activeChannelId);
     set({
-      me: state.users.find((user) => user.id === state.me.id) ?? state.me,
+      me: state.users.find((user) => user.sessionId === state.me.sessionId) ?? state.me,
       users: state.users,
       channels: state.channels,
       broadcastGroups: state.broadcastGroups ?? [],
@@ -179,7 +180,7 @@ export const useApp = create<AppState>((set, get) => ({
     const me = get().me;
     set({
       users,
-      me: me ? (users.find((user) => user.id === me.id) ?? me) : null,
+      me: me ? (users.find((user) => user.sessionId === me.sessionId) ?? me) : null,
     });
   },
 
@@ -282,22 +283,25 @@ export const useApp = create<AppState>((set, get) => ({
 
   setLocalScreen: (stream) => set((state) => ({ voice: { ...state.voice, localScreen: stream } })),
 
-  setRemoteScreen: (userId, stream) => {
+  setRemoteScreen: (sessionId, stream) => {
     set((state) => {
       const remoteScreens = { ...state.voice.remoteScreens };
-      if (stream) remoteScreens[userId] = stream;
-      else delete remoteScreens[userId];
+      if (stream) remoteScreens[sessionId] = stream;
+      else delete remoteScreens[sessionId];
       return {
         voice: {
           ...state.voice,
           remoteScreens,
-          viewerUserId: !stream && state.voice.viewerUserId === userId ? null : state.voice.viewerUserId,
+          viewerSessionId:
+            !stream && state.voice.viewerSessionId === sessionId
+              ? null
+              : state.voice.viewerSessionId,
         },
       };
     });
   },
 
-  setViewer: (userId) => set((state) => ({ voice: { ...state.voice, viewerUserId: userId } })),
+  setViewer: (sessionId) => set((state) => ({ voice: { ...state.voice, viewerSessionId: sessionId } })),
 
   pushToast: (type, text) => {
     const id = ++toastSeq;
@@ -337,7 +341,7 @@ export const useApp = create<AppState>((set, get) => ({
         micReady: false,
         localScreen: null,
         remoteScreens: {},
-        viewerUserId: null,
+        viewerSessionId: null,
       },
       toasts: [],
     });

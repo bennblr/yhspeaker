@@ -160,8 +160,8 @@ export function updateSettings(patch: Partial<MicSettings>): void {
   }, 250);
 }
 
-export function openScreenViewer(userId: string): void {
-  useApp.getState().setViewer(userId);
+export function openScreenViewer(sessionId: string): void {
+  useApp.getState().setViewer(sessionId);
 }
 
 export function closeScreenViewer(): void {
