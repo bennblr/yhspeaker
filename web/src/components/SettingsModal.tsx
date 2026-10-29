@@ -31,6 +31,7 @@ import {
   isMouseAccelerator,
   micLevelPercent,
   sensitivityThreshold,
+  type BroadcastKeys,
 } from '../lib/settings';
 import {
   applyMicGate,
@@ -605,33 +606,56 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   ];
   const keyTargets = [...broadcastTargets, ...priorityTargets];
 
+  // Одна клавиша управляет одной целью. Занятую клавишу забираем у прежней
+  // цели, иначе второе назначение молча проигрывало бы первому.
   function setBroadcastKey(target: KeyTarget, accelerator: string): void {
     const priority = target.owner === 'priority';
-    const keys = priority ? settings.priorityKeys : settings.broadcastKeys;
-    const save = (next: { all: string; groups: Record<string, string> }) =>
-      updateSettings(priority ? { priorityKeys: next } : { broadcastKeys: next });
-    if (target.id === 'all') {
-      save({ ...keys, all: accelerator });
+    if (accelerator && accelerator === settings.pttKey) {
+      toast('error', 'Эта клавиша назначена микрофону — выберите другую');
       return;
     }
-    const groups = { ...keys.groups };
-    if (accelerator) groups[target.id] = accelerator;
-    else delete groups[target.id];
-    save({ ...keys, groups });
+    const release = (keys: BroadcastKeys, owner: 'broadcast' | 'priority'): BroadcastKeys => {
+      if (!accelerator) return keys;
+      const all =
+        keys.all === accelerator && !(owner === target.owner && target.id === 'all')
+          ? ''
+          : keys.all;
+      const groups = { ...keys.groups };
+      for (const [id, value] of Object.entries(groups)) {
+        if (value === accelerator && !(owner === target.owner && id === target.id)) {
+          delete groups[id];
+        }
+      }
+      return { all, groups };
+    };
+    const assign = (keys: BroadcastKeys): BroadcastKeys => {
+      if (target.id === 'all') return { ...keys, all: accelerator };
+      const groups = { ...keys.groups };
+      if (accelerator) groups[target.id] = accelerator;
+      else delete groups[target.id];
+      return { ...keys, groups };
+    };
+    const nextBroadcast = release(settings.broadcastKeys, 'broadcast');
+    const nextPriority = release(settings.priorityKeys, 'priority');
+    updateSettings(
+      priority
+        ? { broadcastKeys: nextBroadcast, priorityKeys: assign(nextPriority) }
+        : { broadcastKeys: assign(nextBroadcast), priorityKeys: nextPriority },
+    );
   }
 
   const hotkeyWarning = (target: KeyTarget): string | null => {
     const value = target.value;
     if (!value) return null;
     if (value === settings.pttKey) {
-      return 'Клавиша занята клавишей микрофона — для вещания она не сработает.';
+      return 'Клавиша занята клавишей микрофона — выберите другую.';
     }
     const taken = keyTargets.some(
       (item) =>
         item.value === value && !(item.owner === target.owner && item.id === target.id),
     );
     if (taken) {
-      return 'Клавиша уже назначена другой цели — сработает только первое назначение.';
+      return 'Клавиша занята другой целью — при назначении она перейдёт сюда.';
     }
     if (desktop && !value.includes('+') && !isMouseAccelerator(value)) {
       return 'Одиночная клавиша будет срабатывать в любой программе, в том числе при вводе текста и в играх. Надёжнее добавить Ctrl, Alt или Shift.';
@@ -1182,8 +1206,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 ))}
               </div>
               <p className="text-[11px] leading-relaxed text-muted">
-                Клавиши приоритетного вещания не должны совпадать с обычным вещанием и
-                микрофоном: сработает только первое назначение. Для группового приоритета
+                Клавиша управляет только одной целью: при назначении она переносится с прежней
+                цели. Клавишу микрофона назначить вещанию нельзя. Для группового приоритета
                 слушатели группы слышат только вас, остальным остаётся обычная картина.
               </p>
             </div>

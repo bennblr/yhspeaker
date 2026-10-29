@@ -268,6 +268,88 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+// Режим удержания для вещания появился в клиенте 1.0.6: старый клиент шлёт
+// только переключение, поэтому сохранённое «Удержание» превращаем
+// в «Переключение», иначе клавиша молча не работала бы.
+function desktopSupportsBroadcastHold(): boolean {
+  const bridge =
+    typeof window !== 'undefined'
+      ? (window as unknown as { la2speak?: { onBroadcastState?: unknown } }).la2speak
+      : undefined;
+  return !bridge || typeof bridge.onBroadcastState === 'function';
+}
+
+// Одна клавиша управляет только одной целью: второе назначение молча
+// проигрывало первому. Приоритетные клавиши появились позже, поэтому при
+// совпадении оставляем их приоритету, а клавишу микрофона не отдаём вещанию.
+function uniqueBroadcastKeys(
+  broadcastKeys: BroadcastKeys,
+  priorityKeys: BroadcastKeys,
+  pttKey: string,
+): { broadcastKeys: BroadcastKeys; priorityKeys: BroadcastKeys } {
+  const used = new Set([pttKey]);
+  const take = (keys: BroadcastKeys): BroadcastKeys => {
+    const all = keys.all && !used.has(keys.all) ? keys.all : '';
+    if (all) used.add(all);
+    const groups: Record<string, string> = {};
+    for (const [id, accelerator] of Object.entries(keys.groups)) {
+      if (used.has(accelerator)) continue;
+      used.add(accelerator);
+      groups[id] = accelerator;
+    }
+    return { all, groups };
+  };
+  const priority = take(priorityKeys);
+  const broadcast = take(broadcastKeys);
+  return { broadcastKeys: broadcast, priorityKeys: priority };
+}
+
+function settingsFromStorage(): MicSettings {
+  const keys = uniqueBroadcastKeys(
+    normalizeBroadcastKeys(undefined, DEFAULT_SETTINGS.broadcastKeys.all),
+    normalizeBroadcastKeys(undefined, ''),
+    DEFAULT_SETTINGS.pttKey,
+  );
+  return {
+    ...DEFAULT_SETTINGS,
+    ...keys,
+    priorityMode: desktopSupportsBroadcastHold() ? DEFAULT_SETTINGS.priorityMode : 'toggle',
+  };
+}
+
+export function loadSettings(): MicSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return settingsFromStorage();
+    const parsed = JSON.parse(raw) as Partial<MicSettings>;
+    const pttKey =
+      typeof parsed.pttKey === 'string' && isValidAccelerator(parsed.pttKey)
+        ? parsed.pttKey
+        : DEFAULT_SETTINGS.pttKey;
+    const keys = uniqueBroadcastKeys(
+      normalizeBroadcastKeys(parsed.broadcastKeys, DEFAULT_SETTINGS.broadcastKeys.all),
+      normalizeBroadcastKeys(parsed.priorityKeys, ''),
+      pttKey,
+    );
+    const holdSupported = desktopSupportsBroadcastHold();
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      inputGain: clamp(Number(parsed.inputGain ?? 1), 0, 2),
+      micSensitivity: clamp(Number(parsed.micSensitivity ?? 65), 0, 100),
+      outputVolume: clamp(Number(parsed.outputVolume ?? 1), 0, 1),
+      mode:
+        parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'open',
+      pttKey,
+      ...keys,
+      broadcastMode: holdSupported && parsed.broadcastMode === 'ptt' ? 'ptt' : 'toggle',
+      priorityMode: holdSupported && parsed.priorityMode === 'ptt' ? 'ptt' : 'toggle',
+    };
+  } catch {
+    return settingsFromStorage();
+  }
+}
+
 function normalizeBroadcastKeys(value: unknown, fallbackAll: string): BroadcastKeys {
   const source = (value ?? {}) as Partial<BroadcastKeys>;
   const all =
@@ -283,42 +365,6 @@ function normalizeBroadcastKeys(value: unknown, fallbackAll: string): BroadcastK
     }
   }
   return { all, groups };
-}
-
-export function loadSettings(): MicSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return {
-        ...DEFAULT_SETTINGS,
-        broadcastKeys: normalizeBroadcastKeys(undefined, DEFAULT_SETTINGS.broadcastKeys.all),
-        priorityKeys: normalizeBroadcastKeys(undefined, ''),
-      };
-    }
-    const parsed = JSON.parse(raw) as Partial<MicSettings>;
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      inputGain: clamp(Number(parsed.inputGain ?? 1), 0, 2),
-      micSensitivity: clamp(Number(parsed.micSensitivity ?? 65), 0, 100),
-      outputVolume: clamp(Number(parsed.outputVolume ?? 1), 0, 1),
-      mode:
-        parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'open',
-      pttKey: typeof parsed.pttKey === 'string' && isValidAccelerator(parsed.pttKey)
-        ? parsed.pttKey
-        : DEFAULT_SETTINGS.pttKey,
-      broadcastKeys: normalizeBroadcastKeys(parsed.broadcastKeys, DEFAULT_SETTINGS.broadcastKeys.all),
-      broadcastMode: parsed.broadcastMode === 'ptt' ? 'ptt' : 'toggle',
-      priorityKeys: normalizeBroadcastKeys(parsed.priorityKeys, ''),
-      priorityMode: parsed.priorityMode === 'toggle' ? 'toggle' : 'ptt',
-    };
-  } catch {
-    return {
-      ...DEFAULT_SETTINGS,
-      broadcastKeys: normalizeBroadcastKeys(undefined, DEFAULT_SETTINGS.broadcastKeys.all),
-      priorityKeys: normalizeBroadcastKeys(undefined, ''),
-    };
-  }
 }
 
 export function saveSettings(settings: MicSettings): void {
