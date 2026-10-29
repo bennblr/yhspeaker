@@ -18,8 +18,6 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const { DEFAULT_SERVER_DOMAIN, normalizeServerUrl } = require('./server-url');
 
-const DEFAULT_SERVER_URL = `https://${DEFAULT_SERVER_DOMAIN}`;
-
 // Без явного имени папка данных установленного клиента совпадает с dev-сборками,
 // и сохранённый там http://127.0.0.1:4000 попадает в релиз.
 if (app.isPackaged) app.setName('LA2Speak');
@@ -116,11 +114,19 @@ function rememberServer(url, name) {
   saveConfig(stored);
 }
 
+// Сервер по умолчанию не задан: без сохранённого адреса клиент сначала спрашивает сервер.
 function resolveStartUrl() {
   const saved = stored.serverUrl ? normalizeServerUrl(stored.serverUrl) : null;
-  const localSaved = saved && /^https?:\/\/(localhost|127\.0\.0\.1)(?::|\/|$)/i.test(saved);
-  if (saved && !(app.isPackaged && localSaved)) return saved;
-  return DEFAULT_SERVER_URL;
+  if (!saved) return null;
+  const localSaved = /^https?:\/\/(localhost|127\.0\.0\.1)(?::|\/|$)/i.test(saved);
+  if (app.isPackaged && localSaved) return null;
+  return saved;
+}
+
+function openStart() {
+  const url = resolveStartUrl();
+  if (url) createMainWindow(url);
+  else openLauncher();
 }
 
 function iconPath() {
@@ -300,7 +306,7 @@ function showMainWindow() {
     mainWindow.focus();
     return;
   }
-  createMainWindow(resolveStartUrl());
+  openStart();
 }
 
 function buildTrayMenu() {
@@ -760,12 +766,12 @@ if (!singleInstance) {
     startKeyboardHook();
     setAccelerator(stored.pttKey);
 
-    createMainWindow(resolveStartUrl());
+    openStart();
     createTray();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow(resolveStartUrl());
+        openStart();
       }
     });
   });
