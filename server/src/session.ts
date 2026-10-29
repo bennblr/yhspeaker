@@ -35,6 +35,7 @@ export class SessionService {
       broadcasting: false,
       broadcastAll: false,
       broadcastGroupIds: [],
+      broadcastPriority: false,
       screenSharing: false,
     };
   }

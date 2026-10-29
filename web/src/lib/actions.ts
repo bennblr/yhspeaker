@@ -104,10 +104,14 @@ export async function toggleMic(): Promise<void> {
   voice.setMuted(!state.voice.muted);
 }
 
-export function setBroadcastTargets(
-  targets: { all: boolean; groupIds: string[] },
-  successText?: string,
-): void {
+export interface BroadcastState {
+  all: boolean;
+  groupIds: string[];
+  // Приоритетное вещание: слушатели слышат только вещающего.
+  priority: boolean;
+}
+
+export function setBroadcastTargets(targets: BroadcastState, successText?: string): void {
   const state = useApp.getState();
   const socket = getSocket();
   if (!socket) return;
@@ -128,40 +132,101 @@ export function setBroadcastTargets(
   });
 }
 
-export function toggleBroadcastAll(): void {
+function broadcastWord(priority: boolean): string {
+  return priority ? 'Приоритетное вещание' : 'Вещание';
+}
+
+export function toggleBroadcastAll(priority: boolean): void {
   const state = useApp.getState();
   const me = state.me;
   if (!me) return;
-  const all = !me.broadcastAll;
+  // Повторное нажатие той же клавиши выключает цель; клавиша другого режима
+  // переключает вещание между обычным и приоритетным.
+  const active = me.broadcastAll && me.broadcastPriority === priority;
+  const all = !active;
   const groupIds = me.broadcastGroupIds;
   let message: string;
-  if (all) message = 'Вещание включено во все голосовые каналы';
+  if (all) message = `${broadcastWord(priority)} включено во все голосовые каналы`;
   else if (groupIds.length > 0) message = 'Вещание во все каналы выключено, группы остались';
   else message = 'Вещание остановлено';
-  setBroadcastTargets({ all, groupIds }, message);
+  setBroadcastTargets({ all, groupIds, priority }, message);
 }
 
-export function toggleBroadcastGroup(groupId: string): void {
+export function toggleBroadcastGroup(groupId: string, priority: boolean): void {
   const state = useApp.getState();
   const me = state.me;
   if (!me) return;
   const group = state.broadcastGroups.find((item) => item.id === groupId);
   if (!group) return;
-  const active = me.broadcastGroupIds.includes(groupId);
+  const active = me.broadcastGroupIds.includes(groupId) && me.broadcastPriority === priority;
   const groupIds = active
     ? me.broadcastGroupIds.filter((id) => id !== groupId)
     : [...me.broadcastGroupIds, groupId];
   let message: string;
-  if (!active) message = `Вещание включено для группы «${group.name}»`;
+  if (!active) message = `${broadcastWord(priority)} включено для группы «${group.name}»`;
   else if (me.broadcastAll || groupIds.length > 0) message = `Группа «${group.name}» убрана из вещания`;
   else message = 'Вещание остановлено';
-  setBroadcastTargets({ all: me.broadcastAll, groupIds }, message);
+  setBroadcastTargets({ all: me.broadcastAll, groupIds, priority }, message);
 }
 
 export function stopBroadcast(): void {
+  heldBroadcastTargets.clear();
+  broadcastHold = null;
   const me = useApp.getState().me;
   if (!me) return;
-  setBroadcastTargets({ all: false, groupIds: [] }, 'Вещание остановлено');
+  setBroadcastTargets({ all: false, groupIds: [], priority: false }, 'Вещание остановлено');
+}
+
+// Режим удержания: запоминаем состояние до нажатия и возвращаем его,
+// когда все удерживаемые клавиши отпущены.
+let broadcastHold: BroadcastState | null = null;
+const heldBroadcastTargets = new Set<string>();
+
+function holdKey(target: string, priority: boolean): string {
+  return priority ? `priority:${target}` : target;
+}
+
+export function startBroadcastHold(target: string, priority: boolean): void {
+  const state = useApp.getState();
+  const me = state.me;
+  if (!me || !state.voice.channelId) return;
+  if (!hasPermission(state.me, state.roles, 'broadcast')) return;
+  const key = holdKey(target, priority);
+  if (heldBroadcastTargets.has(key)) return;
+  if (heldBroadcastTargets.size === 0) {
+    broadcastHold = {
+      all: me.broadcastAll,
+      groupIds: [...me.broadcastGroupIds],
+      priority: me.broadcastPriority,
+    };
+  }
+  heldBroadcastTargets.add(key);
+  if (target === 'all') {
+    setBroadcastTargets({ all: true, groupIds: [...me.broadcastGroupIds], priority });
+    return;
+  }
+  setBroadcastTargets({
+    all: me.broadcastAll,
+    groupIds: me.broadcastGroupIds.includes(target)
+      ? [...me.broadcastGroupIds]
+      : [...me.broadcastGroupIds, target],
+    priority,
+  });
+}
+
+export function endBroadcastHold(target: string, priority: boolean): void {
+  if (!heldBroadcastTargets.delete(holdKey(target, priority))) return;
+  if (heldBroadcastTargets.size > 0) return;
+  releaseBroadcastHolds();
+}
+
+export function releaseBroadcastHolds(): void {
+  if (heldBroadcastTargets.size === 0 && !broadcastHold) return;
+  heldBroadcastTargets.clear();
+  const snapshot = broadcastHold;
+  broadcastHold = null;
+  if (!snapshot || !useApp.getState().voice.channelId) return;
+  setBroadcastTargets(snapshot);
 }
 
 export function toggleScreenShare(): void {

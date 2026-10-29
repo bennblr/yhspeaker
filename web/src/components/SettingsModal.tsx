@@ -279,6 +279,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const me = useApp((state) => state.me);
   const broadcastGroups = useApp((state) => state.broadcastGroups);
   const canBroadcast = useCan('broadcast');
+  // Удержание для вещания появилось в клиенте 1.0.6; старые сборки умеют
+  // только переключение, поэтому вариант просто недоступен.
+  const broadcastPttSupported = !desktop || Boolean(desktop.onBroadcastState);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [level, setLevel] = useState(0);
@@ -575,32 +578,59 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const levelPercent = micLevelPercent(level);
   const gateOpen = settings.mode === 'ptt' ? true : level >= threshold;
 
-  const broadcastTargets = [
-    { id: 'all', name: 'Все каналы', value: settings.broadcastKeys.all },
+  type KeyTarget = {
+    id: string;
+    owner: 'broadcast' | 'priority';
+    name: string;
+    value: string;
+  };
+
+  const broadcastTargets: KeyTarget[] = [
+    { id: 'all', owner: 'broadcast', name: 'Все каналы', value: settings.broadcastKeys.all },
     ...broadcastGroups.map((group) => ({
       id: group.id,
+      owner: 'broadcast' as const,
       name: group.name,
       value: settings.broadcastKeys.groups[group.id] ?? '',
     })),
   ];
+  const priorityTargets: KeyTarget[] = [
+    { id: 'all', owner: 'priority', name: 'Все каналы', value: settings.priorityKeys.all },
+    ...broadcastGroups.map((group) => ({
+      id: group.id,
+      owner: 'priority' as const,
+      name: group.name,
+      value: settings.priorityKeys.groups[group.id] ?? '',
+    })),
+  ];
+  const keyTargets = [...broadcastTargets, ...priorityTargets];
 
-  function setBroadcastKey(targetId: string, accelerator: string): void {
-    if (targetId === 'all') {
-      updateSettings({ broadcastKeys: { ...settings.broadcastKeys, all: accelerator } });
+  function setBroadcastKey(target: KeyTarget, accelerator: string): void {
+    const priority = target.owner === 'priority';
+    const keys = priority ? settings.priorityKeys : settings.broadcastKeys;
+    const save = (next: { all: string; groups: Record<string, string> }) =>
+      updateSettings(priority ? { priorityKeys: next } : { broadcastKeys: next });
+    if (target.id === 'all') {
+      save({ ...keys, all: accelerator });
       return;
     }
-    const groups = { ...settings.broadcastKeys.groups };
-    if (accelerator) groups[targetId] = accelerator;
-    else delete groups[targetId];
-    updateSettings({ broadcastKeys: { ...settings.broadcastKeys, groups } });
+    const groups = { ...keys.groups };
+    if (accelerator) groups[target.id] = accelerator;
+    else delete groups[target.id];
+    save({ ...keys, groups });
   }
 
-  const hotkeyWarning = (targetId: string, value: string): string | null => {
+  const hotkeyWarning = (target: KeyTarget): string | null => {
+    const value = target.value;
     if (!value) return null;
     if (value === settings.pttKey) {
       return 'Клавиша занята клавишей микрофона — для вещания она не сработает.';
     }
-    if (broadcastTargets.some((target) => target.id !== targetId && target.value === value)) {
+    const taken = keyTargets.some(
+      (item) =>
+        item.value === value && !(item.owner === target.owner && item.id === target.id),
+    );
+    if (taken) {
       return 'Клавиша уже назначена другой цели — сработает только первое назначение.';
     }
     if (desktop && !value.includes('+') && !isMouseAccelerator(value)) {
@@ -1020,6 +1050,31 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         {canBroadcast && (
           <Section icon={Radio} title="Горячие клавиши вещания">
             <div className="space-y-3">
+              <div>
+                <label className="label">Режим вещания</label>
+                <div className="relative">
+                  <select
+                    className="input appearance-none pr-9"
+                    value={settings.broadcastMode}
+                    onChange={(event) =>
+                      updateSettings({
+                        broadcastMode: event.target.value === 'ptt' ? 'ptt' : 'toggle',
+                      })
+                    }
+                  >
+                    <option value="toggle">Переключение (нажал — включил или выключил)</option>
+                    <option value="ptt" disabled={!broadcastPttSupported}>
+                      Удержание (push-to-talk)
+                    </option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                </div>
+                {!broadcastPttSupported && (
+                  <p className="mt-1 text-[10px] leading-relaxed text-warn">
+                    Режим удержания появился в клиенте LA2Speak 1.0.6 — обновите приложение.
+                  </p>
+                )}
+              </div>
               <p className="text-[11px] leading-relaxed text-muted">
                 Нажмите на поле и назначьте любое сочетание клавиш — например Ctrl + Shift + K,
                 F8, одиночную клавишу или боковую кнопку мыши.
@@ -1044,8 +1099,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     <div className="flex-1">
                       <HotkeyRecorder
                         value={target.value}
-                        onChange={(value) => setBroadcastKey(target.id, value)}
-                        warning={hotkeyWarning(target.id, target.value)}
+                        onChange={(value) => setBroadcastKey(target, value)}
+                        warning={hotkeyWarning(target)}
                         allowMouse
                       />
                     </div>
@@ -1058,9 +1113,78 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </p>
               )}
               <p className="text-[11px] leading-relaxed text-muted">
-                Клавиша переключает цель: повторное нажатие выключает её. Клавиша Push-to-talk
-                не может быть назначена вещанию. В режиме «Push-to-talk» вещание во все каналы
-                идёт только пока удерживается кнопка микрофона.
+                {settings.broadcastMode === 'ptt'
+                  ? 'Вещание идёт, пока удерживается клавиша или кнопка мыши. После отпускания возвращается прежний набор целей вещания. Клавиша микрофона не может быть назначена вещанию.'
+                  : 'Клавиша переключает цель: повторное нажатие выключает её. Клавиша микрофона не может быть назначена вещанию.'}{' '}
+                В режиме «Push-to-talk» микрофона вещание идёт только пока удерживается кнопка
+                микрофона.
+              </p>
+            </div>
+          </Section>
+        )}
+
+        {canBroadcast && (
+          <Section icon={Radio} title="Приоритетное вещание">
+            <div className="space-y-3">
+              <p className="text-[11px] leading-relaxed text-muted">
+                Работает как обычное вещание, но пока оно активно, слушатели слышат только вас —
+                остальные голоса и звук других каналов для них заглушаются. Звук с демонстрации
+                экрана остаётся слышен.
+              </p>
+              <div>
+                <label className="label">Режим приоритетного вещания</label>
+                <div className="relative">
+                  <select
+                    className="input appearance-none pr-9"
+                    value={settings.priorityMode}
+                    onChange={(event) =>
+                      updateSettings({
+                        priorityMode: event.target.value === 'ptt' ? 'ptt' : 'toggle',
+                      })
+                    }
+                  >
+                    <option value="toggle">Переключение (нажал — включил или выключил)</option>
+                    <option value="ptt" disabled={!broadcastPttSupported}>
+                      Удержание (push-to-talk)
+                    </option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                </div>
+                {!broadcastPttSupported && (
+                  <p className="mt-1 text-[10px] leading-relaxed text-warn">
+                    Режим удержания появился в клиенте LA2Speak 1.0.6 — обновите приложение.
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2.5">
+                {priorityTargets.map((target) => (
+                  <div
+                    key={`priority:${target.id}`}
+                    className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3"
+                  >
+                    <div className="flex min-w-0 items-center gap-2 sm:w-44">
+                      {target.id === 'all' ? (
+                        <Radio className="h-3.5 w-3.5 shrink-0 text-accent" />
+                      ) : (
+                        <Users className="h-3.5 w-3.5 shrink-0 text-muted" />
+                      )}
+                      <span className="truncate text-sm text-slate-200">{target.name}</span>
+                    </div>
+                    <div className="flex-1">
+                      <HotkeyRecorder
+                        value={target.value}
+                        onChange={(value) => setBroadcastKey(target, value)}
+                        warning={hotkeyWarning(target)}
+                        allowMouse
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted">
+                Клавиши приоритетного вещания не должны совпадать с обычным вещанием и
+                микрофоном: сработает только первое назначение. Для группового приоритета
+                слушатели группы слышат только вас, остальным остаётся обычная картина.
               </p>
             </div>
           </Section>

@@ -220,6 +220,7 @@ export class VoiceManager {
       broadcasting: false,
       broadcastAll: false,
       broadcastGroupIds: [],
+      broadcastPriority: false,
       screenSharing: false,
     });
 
@@ -380,7 +381,7 @@ export class VoiceManager {
 
   async setBroadcast(
     sessionId: string,
-    targets: { all: boolean; groupIds: string[] },
+    targets: { all: boolean; groupIds: string[]; priority?: boolean },
   ): Promise<AckResult> {
     const online = this.sessions.get(sessionId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
@@ -394,6 +395,7 @@ export class VoiceManager {
       return { ok: false, error: 'Группы слушателей не найдены' };
     }
     const all = Boolean(targets.all);
+    const priority = Boolean(targets.priority);
     const enabled = all || groupIds.length > 0;
 
     if (enabled) {
@@ -412,6 +414,7 @@ export class VoiceManager {
       broadcasting: enabled,
       broadcastAll: all,
       broadcastGroupIds: groupIds,
+      broadcastPriority: enabled && priority,
     });
     this.reconcileAll();
     return { ok: true };
@@ -429,6 +432,8 @@ export class VoiceManager {
         {
           broadcastGroupIds: groupIds,
           broadcasting: user.broadcastAll || groupIds.length > 0,
+          broadcastPriority:
+            user.broadcastPriority && (user.broadcastAll || groupIds.length > 0),
         },
         false,
       );
@@ -447,7 +452,7 @@ export class VoiceManager {
       if (hasPermission(user, roles, 'broadcast')) continue;
       this.sessions.update(
         user.sessionId,
-        { broadcasting: false, broadcastAll: false, broadcastGroupIds: [] },
+        { broadcasting: false, broadcastAll: false, broadcastGroupIds: [], broadcastPriority: false },
         false,
       );
       changed = true;
@@ -495,6 +500,7 @@ export class VoiceManager {
           broadcasting: false,
           broadcastAll: false,
           broadcastGroupIds: [],
+          broadcastPriority: false,
           screenSharing: false,
         },
         false,
@@ -562,15 +568,37 @@ export class VoiceManager {
       );
   }
 
+  // Сессии, чьё приоритетное вещание слышит этот слушатель. Сам вещатель
+  // (и его другие устройства) в список не попадает — ему остальных слышно.
+  private prioritySpeakersFor(peer: Peer): Set<string> {
+    const result = new Set<string>();
+    for (const user of this.sessions.list()) {
+      if (!user.broadcasting || !user.broadcastPriority) continue;
+      if (user.id === peer.accountId) continue;
+      if (!this.isBroadcastAudience(peer.accountId, user)) continue;
+      result.add(user.sessionId);
+    }
+    return result;
+  }
+
   private async syncPeer(peer: Peer): Promise<void> {
     if (peer.closed) return;
     const online = this.sessions.get(peer.sessionId);
     if (!online?.channelId) return;
 
+    const prioritySpeakers = this.prioritySpeakersFor(peer);
     const desired = new Set<string>();
     for (const [producerId, meta] of this.producerMeta) {
       // свои же устройства не слышим, чтобы не было эха
       if (meta.sessionId === peer.sessionId || meta.accountId === peer.accountId) continue;
+      // приоритетное вещание заглушает всех остальных, пока звучит
+      if (
+        prioritySpeakers.size > 0 &&
+        meta.source === 'mic' &&
+        !prioritySpeakers.has(meta.sessionId)
+      ) {
+        continue;
+      }
       if (meta.channelId === online.channelId) {
         desired.add(producerId);
         continue;

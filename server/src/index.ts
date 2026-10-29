@@ -895,7 +895,11 @@ io.on('connection', async (socket: AppSocket) => {
       const groupIds = Array.isArray(payload?.groupIds)
         ? payload.groupIds.filter((id: unknown): id is string => typeof id === 'string')
         : [];
-      const result = await voice.setBroadcast(sessionId, { all, groupIds });
+      const result = await voice.setBroadcast(sessionId, {
+        all,
+        groupIds,
+        priority: Boolean(payload?.priority),
+      });
       if (!result.ok && result.error) socket.emit('toast', { type: 'error', text: result.error });
       ack?.(result);
     }),

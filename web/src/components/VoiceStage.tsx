@@ -366,6 +366,11 @@ function ParticipantTile({
             title={`Эфир: ${broadcastAudience(user, groups)}`}
           >
             <Radio className="h-2.5 w-2.5" /> эфир
+            {user.broadcastPriority && (
+              <span className="rounded-full bg-ok px-1 text-[8px] font-bold text-bg">
+                приоритет
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -500,12 +505,15 @@ function ParticipantTile({
 }
 
 function broadcastAudience(user: OnlineUser, groups: BroadcastGroup[]): string {
-  if (user.broadcastAll) return 'все голосовые каналы';
-  const names = groups
-    .filter((group) => user.broadcastGroupIds.includes(group.id))
-    .map((group) => `«${group.name}»`);
-  if (names.length === 0) return 'без слушателей';
-  return names.length === 1 ? `группа ${names[0]}` : `группы ${names.join(', ')}`;
+  const audience = (() => {
+    if (user.broadcastAll) return 'все голосовые каналы';
+    const names = groups
+      .filter((group) => user.broadcastGroupIds.includes(group.id))
+      .map((group) => `«${group.name}»`);
+    if (names.length === 0) return 'без слушателей';
+    return names.length === 1 ? `группа ${names[0]}` : `группы ${names.join(', ')}`;
+  })();
+  return user.broadcastPriority ? `${audience} · приоритет` : audience;
 }
 
 export function BroadcastBanner() {

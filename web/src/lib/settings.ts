@@ -1,5 +1,9 @@
 export type PttMode = 'open' | 'ptt' | 'toggle';
 
+// Как срабатывают горячие клавиши вещания: переключение (как раньше) или
+// удержание, пока клавиша или кнопка мыши зажата.
+export type BroadcastMode = 'toggle' | 'ptt';
+
 // Предел индивидуальной громкости собеседника: 200% от обычного уровня.
 export const MAX_USER_VOLUME = 2;
 
@@ -20,6 +24,11 @@ export interface MicSettings {
   mode: PttMode;
   pttKey: string;
   broadcastKeys: BroadcastKeys;
+  broadcastMode: BroadcastMode;
+  // Приоритетное вещание: те же цели и режимы, но пока оно активно,
+  // слушатели не слышат никого, кроме вещающего.
+  priorityKeys: BroadcastKeys;
+  priorityMode: BroadcastMode;
 }
 
 // Кнопки мыши, которые можно назначить на микрофон. Средняя и две боковые:
@@ -217,6 +226,16 @@ export function matchesPointerKey(
   return modifiersMatch(event, parts);
 }
 
+// Отпускание кнопки мыши сверяем без модификаторов: их могли отпустить раньше.
+export function matchesPointerRelease(
+  event: { button: number },
+  accelerator: string,
+): boolean {
+  if (!isValidAccelerator(accelerator)) return false;
+  const key = accelerator.split('+').pop() ?? '';
+  return POINTER_BUTTONS[event.button] === key;
+}
+
 export function formatAccelerator(accelerator: string): string {
   if (!accelerator) return 'Не назначено';
   return accelerator
@@ -237,6 +256,9 @@ export const DEFAULT_SETTINGS: MicSettings = {
   mode: 'open',
   pttKey: 'V',
   broadcastKeys: { all: 'Alt+1', groups: {} },
+  broadcastMode: 'toggle',
+  priorityKeys: { all: '', groups: {} },
+  priorityMode: 'ptt',
 };
 
 const STORAGE_KEY = 'la2speak.settings.v1';
@@ -246,12 +268,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeBroadcastKeys(value: unknown): BroadcastKeys {
+function normalizeBroadcastKeys(value: unknown, fallbackAll: string): BroadcastKeys {
   const source = (value ?? {}) as Partial<BroadcastKeys>;
   const all =
     typeof source.all === 'string' && (source.all === '' || isValidAccelerator(source.all))
       ? source.all
-      : DEFAULT_SETTINGS.broadcastKeys.all;
+      : fallbackAll;
   const groups: Record<string, string> = {};
   if (source.groups && typeof source.groups === 'object') {
     for (const [id, accelerator] of Object.entries(source.groups)) {
@@ -267,7 +289,11 @@ export function loadSettings(): MicSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { ...DEFAULT_SETTINGS, broadcastKeys: normalizeBroadcastKeys(undefined) };
+      return {
+        ...DEFAULT_SETTINGS,
+        broadcastKeys: normalizeBroadcastKeys(undefined, DEFAULT_SETTINGS.broadcastKeys.all),
+        priorityKeys: normalizeBroadcastKeys(undefined, ''),
+      };
     }
     const parsed = JSON.parse(raw) as Partial<MicSettings>;
     return {
@@ -281,10 +307,17 @@ export function loadSettings(): MicSettings {
       pttKey: typeof parsed.pttKey === 'string' && isValidAccelerator(parsed.pttKey)
         ? parsed.pttKey
         : DEFAULT_SETTINGS.pttKey,
-      broadcastKeys: normalizeBroadcastKeys(parsed.broadcastKeys),
+      broadcastKeys: normalizeBroadcastKeys(parsed.broadcastKeys, DEFAULT_SETTINGS.broadcastKeys.all),
+      broadcastMode: parsed.broadcastMode === 'ptt' ? 'ptt' : 'toggle',
+      priorityKeys: normalizeBroadcastKeys(parsed.priorityKeys, ''),
+      priorityMode: parsed.priorityMode === 'toggle' ? 'toggle' : 'ptt',
     };
   } catch {
-    return { ...DEFAULT_SETTINGS, broadcastKeys: normalizeBroadcastKeys(undefined) };
+    return {
+      ...DEFAULT_SETTINGS,
+      broadcastKeys: normalizeBroadcastKeys(undefined, DEFAULT_SETTINGS.broadcastKeys.all),
+      priorityKeys: normalizeBroadcastKeys(undefined, ''),
+    };
   }
 }
 

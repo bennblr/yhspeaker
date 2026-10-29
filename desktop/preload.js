@@ -24,6 +24,14 @@ contextBridge.exposeInMainWorld('la2speak', {
     ipcRenderer.on('broadcast:toggle', listener);
     return () => ipcRenderer.removeListener('broadcast:toggle', listener);
   },
+  onBroadcastState: (callback) => {
+    const listener = (_event, event) => {
+      if (!event || typeof event.target !== 'string') return;
+      callback({ target: event.target, active: Boolean(event.active) });
+    };
+    ipcRenderer.on('broadcast:state', listener);
+    return () => ipcRenderer.removeListener('broadcast:state', listener);
+  },
   hotkeysAvailable: () => ipcRenderer.invoke('hotkeys:available'),
   changeServer: () => ipcRenderer.invoke('app:change-server'),
   listServers: () => ipcRenderer.invoke('app:list-servers'),

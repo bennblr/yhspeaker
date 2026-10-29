@@ -16,17 +16,28 @@ import { connectSocket, getSocket } from './lib/socket';
 import { describeDevice } from './lib/device';
 import { voice } from './lib/voice';
 import { preloadNoiseSuppressor } from './lib/micGate';
-import { logout, toast, toggleBroadcastAll, toggleBroadcastGroup } from './lib/actions';
-import { desktop } from './lib/desktop';
+import {
+  endBroadcastHold,
+  logout,
+  releaseBroadcastHolds,
+  startBroadcastHold,
+  toast,
+  toggleBroadcastAll,
+  toggleBroadcastGroup,
+} from './lib/actions';
+import { desktop, type BroadcastBinding } from './lib/desktop';
 import {
   isGlobalAccelerator,
   matchesPointerKey,
+  matchesPointerRelease,
   matchesPttKey,
   matchesPttRelease,
+  type BroadcastMode,
+  type MicSettings,
 } from './lib/settings';
 import { cn, isTypingTarget, serverLabel } from './lib/utils';
 import { currentServerUrl, rememberServer } from './lib/servers';
-import { hasPermission } from '@tsds/shared';
+import { hasPermission, type BroadcastGroup } from '@tsds/shared';
 
 function Splash({ offline }: { offline: boolean }) {
   return (
@@ -71,6 +82,51 @@ function Shell({ serverName, children }: { serverName: string; children: React.R
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>
   );
+}
+
+interface BroadcastBindingEntry {
+  target: string;
+  priority: boolean;
+  accelerator: string;
+  mode: BroadcastMode;
+}
+
+// Клавиши обычного и приоритетного вещания в одном списке: приоритет
+// занимает свободные клавиши последним, чтобы не отобрать их у обычного.
+function collectBroadcastBindings(
+  settings: MicSettings,
+  groups: BroadcastGroup[],
+): BroadcastBindingEntry[] {
+  const bindings: BroadcastBindingEntry[] = [];
+  const used = new Set([settings.pttKey]);
+  const add = (
+    target: string,
+    priority: boolean,
+    accelerator: string | undefined,
+    mode: BroadcastMode,
+  ): void => {
+    if (!accelerator || used.has(accelerator)) return;
+    used.add(accelerator);
+    bindings.push({ target, priority, accelerator, mode });
+  };
+  add('all', false, settings.broadcastKeys.all, settings.broadcastMode);
+  for (const group of groups) {
+    add(group.id, false, settings.broadcastKeys.groups[group.id], settings.broadcastMode);
+  }
+  add('all', true, settings.priorityKeys.all, settings.priorityMode);
+  for (const group of groups) {
+    add(group.id, true, settings.priorityKeys.groups[group.id], settings.priorityMode);
+  }
+  return bindings;
+}
+
+function desktopTarget(binding: BroadcastBindingEntry): string {
+  return binding.priority ? `priority:${binding.target}` : binding.target;
+}
+
+function parseDesktopTarget(target: string): { target: string; priority: boolean } {
+  if (target.startsWith('priority:')) return { target: target.slice(9), priority: true };
+  return { target, priority: false };
 }
 
 export function App() {
@@ -410,103 +466,152 @@ export function App() {
       void desktop.setBroadcastKeys([]);
       return;
     }
-    const bindings: { target: string; accelerator: string }[] = [];
-    const used = new Set([settings.pttKey]);
-    const add = (target: string, accelerator: string | undefined): void => {
-      if (!accelerator || used.has(accelerator) || !isGlobalAccelerator(accelerator)) return;
-      used.add(accelerator);
-      bindings.push({ target, accelerator });
-    };
-    add('all', settings.broadcastKeys.all);
-    for (const group of broadcastGroups) {
-      add(group.id, settings.broadcastKeys.groups[group.id]);
-    }
+    const bindings: BroadcastBinding[] = collectBroadcastBindings(settings, broadcastGroups)
+      .filter((binding) => isGlobalAccelerator(binding.accelerator))
+      .map((binding) => ({
+        target: desktopTarget(binding),
+        accelerator: binding.accelerator,
+        mode: binding.mode,
+      }));
     void desktop.setBroadcastKeys(bindings);
-  }, [canBroadcast, settings.broadcastKeys, settings.pttKey, broadcastGroups]);
+  }, [
+    canBroadcast,
+    settings.broadcastKeys,
+    settings.broadcastMode,
+    settings.priorityKeys,
+    settings.priorityMode,
+    settings.pttKey,
+    broadcastGroups,
+  ]);
+
+  useEffect(() => {
+    releaseBroadcastHolds();
+  }, [settings.broadcastMode, settings.priorityMode]);
 
   useEffect(() => {
     if (!desktop) return;
-    return desktop.onBroadcastToggle((target) => {
+    const modeFor = (priority: boolean): BroadcastMode => {
+      const state = useApp.getState();
+      return priority ? state.settings.priorityMode : state.settings.broadcastMode;
+    };
+    const offToggle = desktop.onBroadcastToggle((raw) => {
       const state = useApp.getState();
       if (!hasPermission(state.me, state.roles, 'broadcast')) return;
-      if (target === 'all') toggleBroadcastAll();
-      else toggleBroadcastGroup(target);
+      const { target, priority } = parseDesktopTarget(raw);
+      if (modeFor(priority) === 'ptt') return;
+      if (target === 'all') toggleBroadcastAll(priority);
+      else toggleBroadcastGroup(target, priority);
     });
+    const offState = desktop.onBroadcastState?.((event) => {
+      const state = useApp.getState();
+      if (!hasPermission(state.me, state.roles, 'broadcast')) return;
+      const { target, priority } = parseDesktopTarget(event.target);
+      if (modeFor(priority) !== 'ptt') return;
+      if (event.active) startBroadcastHold(target, priority);
+      else endBroadcastHold(target, priority);
+    });
+    return () => {
+      offToggle();
+      offState?.();
+    };
   }, []);
 
   useEffect(() => {
     if (!canBroadcast) return;
     const desktopHotkeys = Boolean(desktop && globalHotkeys);
-    const down = (event: KeyboardEvent) => {
-      if (event.repeat || isTypingTarget(event.target)) return;
-      const state = useApp.getState();
-      const keys = state.settings.broadcastKeys;
-      if (
-        keys.all &&
-        keys.all !== state.settings.pttKey &&
-        !(desktopHotkeys && isGlobalAccelerator(keys.all)) &&
-        matchesPttKey(event, keys.all)
-      ) {
-        event.preventDefault();
-        toggleBroadcastAll();
-        return;
-      }
-      for (const group of state.broadcastGroups) {
-        const accelerator = keys.groups[group.id];
-        if (!accelerator || accelerator === state.settings.pttKey) continue;
-        if (desktopHotkeys && isGlobalAccelerator(accelerator)) continue;
-        if (matchesPttKey(event, accelerator)) {
-          event.preventDefault();
-          toggleBroadcastGroup(group.id);
-          return;
+
+    // Клавиши, которые обрабатывает браузер: глобальные в приложении уже
+    // заняты хуком Windows.
+    const windowBindings = (): BroadcastBindingEntry[] =>
+      collectBroadcastBindings(
+        useApp.getState().settings,
+        useApp.getState().broadcastGroups,
+      ).filter((binding) => !(desktopHotkeys && isGlobalAccelerator(binding.accelerator)));
+
+    const pressedBinding = (
+      event: KeyboardEvent | PointerEvent,
+    ): BroadcastBindingEntry | null => {
+      const isMouse = !(event instanceof KeyboardEvent);
+      const matches = (accelerator: string) =>
+        isMouse
+          ? matchesPointerKey(event as PointerEvent, accelerator)
+          : matchesPttKey(event as KeyboardEvent, accelerator);
+      return windowBindings().find((binding) => matches(binding.accelerator)) ?? null;
+    };
+
+    const activate = (binding: BroadcastBindingEntry) => {
+      if (binding.mode === 'ptt') startBroadcastHold(binding.target, binding.priority);
+      else if (binding.target === 'all') toggleBroadcastAll(binding.priority);
+      else toggleBroadcastGroup(binding.target, binding.priority);
+    };
+
+    // Отпускание сверяем только с самой клавишей или кнопкой: модификаторы
+    // к этому моменту игрок уже мог отпустить.
+    const release = (event: KeyboardEvent | PointerEvent) => {
+      const isMouse = !(event instanceof KeyboardEvent);
+      const released = (accelerator: string) =>
+        isMouse
+          ? matchesPointerRelease(event as PointerEvent, accelerator)
+          : matchesPttRelease(event as KeyboardEvent, accelerator);
+      for (const binding of windowBindings()) {
+        if (binding.mode !== 'ptt') continue;
+        if (released(binding.accelerator)) {
+          endBroadcastHold(binding.target, binding.priority);
         }
       }
     };
+
+    const down = (event: KeyboardEvent) => {
+      if (event.repeat || isTypingTarget(event.target)) return;
+      const binding = pressedBinding(event);
+      if (!binding) return;
+      event.preventDefault();
+      activate(binding);
+    };
+    const up = (event: KeyboardEvent) => {
+      release(event);
+    };
     const pointerDown = (event: PointerEvent) => {
       if (event.button === 0 || isTypingTarget(event.target)) return;
-      const state = useApp.getState();
-      const keys = state.settings.broadcastKeys;
-      if (
-        keys.all &&
-        keys.all !== state.settings.pttKey &&
-        !(desktopHotkeys && isGlobalAccelerator(keys.all)) &&
-        matchesPointerKey(event, keys.all)
-      ) {
-        event.preventDefault();
-        toggleBroadcastAll();
-        return;
-      }
-      for (const group of state.broadcastGroups) {
-        const accelerator = keys.groups[group.id];
-        if (!accelerator || accelerator === state.settings.pttKey) continue;
-        if (desktopHotkeys && isGlobalAccelerator(accelerator)) continue;
-        if (matchesPointerKey(event, accelerator)) {
-          event.preventDefault();
-          toggleBroadcastGroup(group.id);
-          return;
-        }
-      }
+      const binding = pressedBinding(event);
+      if (!binding) return;
+      event.preventDefault();
+      activate(binding);
+    };
+    const pointerUp = (event: PointerEvent) => {
+      release(event);
     };
     // Боковые кнопки мыши иначе листают историю браузера.
     const auxClick = (event: MouseEvent) => {
       if (event.button === 0) return;
-      const state = useApp.getState();
-      const keys = state.settings.broadcastKeys;
-      const assigned = [
-        keys.all,
-        ...state.broadcastGroups.map((group) => keys.groups[group.id]),
-      ];
-      if (assigned.some((value) => value && matchesPointerKey(event, value))) {
+      if (windowBindings().some((binding) => matchesPointerKey(event, binding.accelerator))) {
         event.preventDefault();
       }
     };
+    // В браузере при потере фокуса клавишу отпустить некому — снимаем эфир.
+    // В приложении для Windows глобальный хук всегда пришлёт отпускание.
+    const releaseAll = () => releaseBroadcastHolds();
+    const onVisibility = () => {
+      if (document.hidden) releaseAll();
+    };
     window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
     window.addEventListener('pointerdown', pointerDown);
+    window.addEventListener('pointerup', pointerUp);
     window.addEventListener('auxclick', auxClick);
+    if (!desktopHotkeys) {
+      window.addEventListener('blur', releaseAll);
+      document.addEventListener('visibilitychange', onVisibility);
+    }
     return () => {
       window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
       window.removeEventListener('pointerdown', pointerDown);
+      window.removeEventListener('pointerup', pointerUp);
       window.removeEventListener('auxclick', auxClick);
+      window.removeEventListener('blur', releaseAll);
+      document.removeEventListener('visibilitychange', onVisibility);
+      releaseBroadcastHolds();
     };
   }, [canBroadcast, globalHotkeys]);
 

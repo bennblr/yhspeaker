@@ -282,6 +282,18 @@ function sendMicToggle() {
   }
 }
 
+// Режим переключения шлёт одно событие на нажатие, режим удержания —
+// отдельные сигналы включения и выключения, чтобы окно могло вести эфир
+// ровно пока клавиша или кнопка мыши зажата.
+function sendBroadcast(binding, active) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (binding.mode === 'ptt') {
+    mainWindow.webContents.send('broadcast:state', { target: binding.target, active });
+    return;
+  }
+  if (active) mainWindow.webContents.send('broadcast:toggle', binding.target);
+}
+
 function trayImage(name) {
   const image = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray', `${name}.png`));
   return image.isEmpty() ? nativeImage.createFromPath(iconPath()) : image;
@@ -461,9 +473,7 @@ function startKeyboardHook() {
         if (!eventMatches(event, binding)) continue;
         if (broadcastHeld.has(binding.target)) return;
         broadcastHeld.add(binding.target);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('broadcast:toggle', binding.target);
-        }
+        sendBroadcast(binding, true);
         return;
       }
 
@@ -480,7 +490,9 @@ function startKeyboardHook() {
     hook.on('keyup', (event) => {
       for (const binding of broadcastBindings) {
         if (binding.mouse !== undefined) continue;
-        if (event.keycode === binding.keycode) broadcastHeld.delete(binding.target);
+        if (event.keycode !== binding.keycode) continue;
+        if (!broadcastHeld.delete(binding.target)) continue;
+        if (binding.mode === 'ptt') sendBroadcast(binding, false);
       }
       updateModifier(event, false);
 
@@ -496,9 +508,7 @@ function startKeyboardHook() {
         if (!mouseMatches(event, binding)) continue;
         if (broadcastHeld.has(binding.target)) return;
         broadcastHeld.add(binding.target);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('broadcast:toggle', binding.target);
-        }
+        sendBroadcast(binding, true);
         return;
       }
 
@@ -515,7 +525,9 @@ function startKeyboardHook() {
     hook.on('mouseup', (event) => {
       for (const binding of broadcastBindings) {
         if (binding.mouse === undefined) continue;
-        if (event.button === binding.mouse) broadcastHeld.delete(binding.target);
+        if (event.button !== binding.mouse) continue;
+        if (!broadcastHeld.delete(binding.target)) continue;
+        if (binding.mode === 'ptt') sendBroadcast(binding, false);
       }
 
       if (!currentAccelerator || currentAccelerator.mouse === undefined) return;
@@ -562,7 +574,13 @@ ipcMain.handle('broadcast:set-keys', (_event, bindings) => {
     for (const item of bindings) {
       if (!item || typeof item.target !== 'string') continue;
       const parsed = parseAccelerator(item.accelerator);
-      if (parsed) next.push({ target: item.target, ...parsed });
+      if (parsed) {
+        next.push({
+          target: item.target,
+          mode: item.mode === 'ptt' ? 'ptt' : 'toggle',
+          ...parsed,
+        });
+      }
     }
   }
   broadcastBindings = next;

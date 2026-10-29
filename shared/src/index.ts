@@ -128,6 +128,8 @@ export interface OnlineUser {
   broadcasting: boolean;
   broadcastAll: boolean;
   broadcastGroupIds: string[];
+  // Приоритетное вещание: пока оно активно, слушатели слышат только вещающего.
+  broadcastPriority: boolean;
   screenSharing: boolean;
 }
 
