@@ -2,7 +2,7 @@ import { useApp } from './store';
 import { getSocket, disconnectSocket } from './socket';
 import { voice } from './voice';
 import type { MicSettings } from './settings';
-import { hasPermission, type Channel } from '@tsds/shared';
+import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 
 export function toast(type: 'ok' | 'error' | 'info', text: string): void {
   useApp.getState().pushToast(type, text);
@@ -49,6 +49,38 @@ export async function joinVoice(channelId: string): Promise<void> {
 
 export function leaveVoice(): void {
   voice.leave();
+}
+
+export function canDragUser(user: OnlineUser): boolean {
+  const state = useApp.getState();
+  if (!user.channelId) return false;
+  return user.id === state.me?.id || hasPermission(state.me, state.roles, 'moderate');
+}
+
+export function moveUserToChannel(user: OnlineUser, channel: Channel): void {
+  const state = useApp.getState();
+  if (channel.type !== 'voice' || !user.channelId || user.channelId === channel.id) return;
+  if (user.id === state.me?.id) {
+    void joinVoice(channel.id);
+    return;
+  }
+  if (!hasPermission(state.me, state.roles, 'moderate')) {
+    toast('error', 'Недостаточно прав для перемещения участников');
+    return;
+  }
+  const socket = getSocket();
+  if (!socket?.connected) {
+    toast('error', 'Нет соединения с сервером');
+    return;
+  }
+  socket.emit(
+    'mod:moveUser',
+    { userId: user.id, sessionId: user.sessionId, channelId: channel.id },
+    (result) => {
+      if (!result.ok) toast('error', result.error ?? 'Не удалось переместить участника');
+      else toast('ok', `${user.displayName} → «${channel.name}»`);
+    },
+  );
 }
 
 export function toggleMute(): void {

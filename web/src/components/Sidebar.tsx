@@ -1,3 +1,4 @@
+import { createContext, useContext, useMemo, useState, type DragEvent } from 'react';
 import {
   Hash,
   HeadphoneOff,
@@ -18,18 +19,38 @@ import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
 import { useApp } from '../lib/store';
 import { cn, serverLabel } from '../lib/utils';
-import { joinVoice, selectChannel } from '../lib/actions';
+import { canDragUser, joinVoice, moveUserToChannel, selectChannel } from '../lib/actions';
 import { primaryRole, roleLabel } from '../lib/roles';
+
+interface DragState {
+  user: OnlineUser | null;
+  overChannelId: string | null;
+  start: (event: DragEvent, user: OnlineUser) => void;
+  end: () => void;
+  setOver: (channelId: string | null) => void;
+}
+
+const DragContext = createContext<DragState | null>(null);
 
 function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolean }) {
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
   const primary = user.role === 'member' ? primaryRole(user, roles) : null;
+  const drag = useContext(DragContext);
+  const draggable = drag !== null && canDragUser(user);
+  const dragging = drag?.user?.sessionId === user.sessionId;
 
   return (
     <div
-      className="flex items-center gap-2 rounded-md py-1 pl-[30px] pr-2 text-[12px] text-slate-400 transition hover:bg-white/[0.03]"
-      title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
+      draggable={draggable}
+      onDragStart={draggable ? (event) => drag.start(event, user) : undefined}
+      onDragEnd={draggable ? drag.end : undefined}
+      className={cn(
+        'flex items-center gap-2 rounded-md py-1 pl-[30px] pr-2 text-[12px] text-slate-400 transition hover:bg-white/[0.03]',
+        draggable && 'cursor-grab active:cursor-grabbing',
+        dragging && 'opacity-40',
+      )}
+      title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}${draggable ? ' · перетащите в другой канал' : ''}`}
     >
       <Avatar id={user.id} name={user.displayName} size="xs" speaking={speaking} />
       <span
@@ -80,6 +101,7 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
 function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speaking: Set<string> }) {
   const roles = useApp((state) => state.roles);
   const localMutedIds = useApp((state) => state.localMuted);
+  const drag = useContext(DragContext);
 
   return (
     <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-0.5">
@@ -87,11 +109,20 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
         const primary = user.role === 'member' ? primaryRole(user, roles) : null;
         const isSpeaking = speaking.has(user.sessionId);
         const localMuted = localMutedIds.includes(user.id);
+        const draggable = drag !== null && canDragUser(user);
+        const dragging = drag?.user?.sessionId === user.sessionId;
         return (
           <span
             key={user.sessionId}
+            draggable={draggable}
+            onDragStart={draggable ? (event) => drag.start(event, user) : undefined}
+            onDragEnd={draggable ? drag.end : undefined}
             title={`${user.displayName}${user.label ? ` (${user.label})` : ''} · ${roleLabel(user, roles)}${user.broadcasting ? ' — вещает' : ''}`}
-            className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-panel2/70 py-0.5 pl-0.5 pr-1.5 text-[11px] text-slate-300"
+            className={cn(
+              'flex min-w-0 max-w-full items-center gap-1 rounded-md bg-panel2/70 py-0.5 pl-0.5 pr-1.5 text-[11px] text-slate-300',
+              draggable && 'cursor-grab active:cursor-grabbing',
+              dragging && 'opacity-40',
+            )}
           >
             <Avatar id={user.id} name={user.displayName} size="xs" speaking={isSpeaking} />
             <span
@@ -140,8 +171,35 @@ function ChannelRow({
   onClick: () => void;
 }) {
   const Icon = channel.type === 'voice' ? Volume2 : Hash;
+  const drag = useContext(DragContext);
+  const acceptsDrop = Boolean(
+    drag?.user && channel.type === 'voice' && drag.user.channelId !== channel.id,
+  );
+  const dropActive = acceptsDrop && drag?.overChannelId === channel.id;
+
   return (
-    <div>
+    <div
+      onDragOver={
+        acceptsDrop
+          ? (event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              drag?.setOver(channel.id);
+            }
+          : undefined
+      }
+      onDragLeave={acceptsDrop ? () => drag?.setOver(null) : undefined}
+      onDrop={
+        acceptsDrop
+          ? (event) => {
+              event.preventDefault();
+              drag?.setOver(null);
+              if (drag?.user) moveUserToChannel(drag.user, channel);
+              drag?.end();
+            }
+          : undefined
+      }
+    >
       <button
         type="button"
         onClick={onClick}
@@ -149,6 +207,7 @@ function ChannelRow({
           'sidebar-item group',
           active && 'sidebar-item-active',
           channel.type === 'voice' && connected && 'text-slate-100',
+          dropActive && 'bg-accent/15 ring-1 ring-inset ring-accent/60',
         )}
       >
         <Icon
@@ -245,6 +304,27 @@ export function Sidebar({
   const textChannels = channels.filter((channel) => channel.type === 'text');
   const canManageChannels = hasPermission(me, roles, 'channels');
 
+  const [dragUser, setDragUser] = useState<OnlineUser | null>(null);
+  const [overChannelId, setOverChannelId] = useState<string | null>(null);
+  const dragState = useMemo<DragState>(
+    () => ({
+      user: dragUser,
+      overChannelId,
+      start: (event, user) => {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', user.id);
+        setDragUser(user);
+        setOverChannelId(null);
+      },
+      end: () => {
+        setDragUser(null);
+        setOverChannelId(null);
+      },
+      setOver: setOverChannelId,
+    }),
+    [dragUser, overChannelId],
+  );
+
   function handleChannel(channel: Channel) {
     if (channel.type === 'voice' && voiceChannelId !== channel.id) {
       void joinVoice(channel.id);
@@ -285,6 +365,7 @@ export function Sidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
+        <DragContext.Provider value={dragState}>
         <SectionTitle onAdd={canManageChannels ? onOpenAdmin : undefined}>Голосовые каналы</SectionTitle>
         <div className="space-y-0.5">
           {voiceChannels.map((channel) => {
@@ -325,6 +406,7 @@ export function Sidebar({
             Каналов пока нет. Администратор может создать их в панели управления.
           </p>
         )}
+        </DragContext.Provider>
       </div>
 
       <UserBar onOpenSettings={onOpenSettings} onOpenAdmin={onOpenAdmin} />
