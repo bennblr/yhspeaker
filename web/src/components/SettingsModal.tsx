@@ -1022,10 +1022,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="space-y-3">
               <p className="text-[11px] leading-relaxed text-muted">
                 Нажмите на поле и назначьте любое сочетание клавиш — например Ctrl + Shift + K,
-                F8 или одиночную клавишу.
+                F8, одиночную клавишу или боковую кнопку мыши.
                 {desktop
-                  ? ' В приложении для Windows все эти клавиши работают глобально — даже когда окно свёрнуто или активно другое приложение. Одиночные клавиши без модификатора тоже срабатывают везде, поэтому назначайте их осознанно.'
-                  : ' В браузере клавиши работают, когда вкладка активна; глобальный режим доступен в приложении для Windows.'}
+                  ? ' В приложении для Windows все эти клавиши и кнопки мыши работают глобально — даже когда окно свёрнуто или активно другое приложение. Одиночные клавиши без модификатора тоже срабатывают везде, поэтому назначайте их осознанно.'
+                  : ' В браузере клавиши и боковые кнопки мыши работают, когда вкладка активна; глобальный режим доступен в приложении для Windows.'}
               </p>
               <div className="space-y-2.5">
                 {broadcastTargets.map((target) => (
@@ -1046,6 +1046,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         value={target.value}
                         onChange={(value) => setBroadcastKey(target.id, value)}
                         warning={hotkeyWarning(target.id, target.value)}
+                        allowMouse
                       />
                     </div>
                   </div>

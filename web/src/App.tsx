@@ -462,8 +462,52 @@ export function App() {
         }
       }
     };
+    const pointerDown = (event: PointerEvent) => {
+      if (event.button === 0 || isTypingTarget(event.target)) return;
+      const state = useApp.getState();
+      const keys = state.settings.broadcastKeys;
+      if (
+        keys.all &&
+        keys.all !== state.settings.pttKey &&
+        !(desktopHotkeys && isGlobalAccelerator(keys.all)) &&
+        matchesPointerKey(event, keys.all)
+      ) {
+        event.preventDefault();
+        toggleBroadcastAll();
+        return;
+      }
+      for (const group of state.broadcastGroups) {
+        const accelerator = keys.groups[group.id];
+        if (!accelerator || accelerator === state.settings.pttKey) continue;
+        if (desktopHotkeys && isGlobalAccelerator(accelerator)) continue;
+        if (matchesPointerKey(event, accelerator)) {
+          event.preventDefault();
+          toggleBroadcastGroup(group.id);
+          return;
+        }
+      }
+    };
+    // Боковые кнопки мыши иначе листают историю браузера.
+    const auxClick = (event: MouseEvent) => {
+      if (event.button === 0) return;
+      const state = useApp.getState();
+      const keys = state.settings.broadcastKeys;
+      const assigned = [
+        keys.all,
+        ...state.broadcastGroups.map((group) => keys.groups[group.id]),
+      ];
+      if (assigned.some((value) => value && matchesPointerKey(event, value))) {
+        event.preventDefault();
+      }
+    };
     window.addEventListener('keydown', down);
-    return () => window.removeEventListener('keydown', down);
+    window.addEventListener('pointerdown', pointerDown);
+    window.addEventListener('auxclick', auxClick);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('pointerdown', pointerDown);
+      window.removeEventListener('auxclick', auxClick);
+    };
   }, [canBroadcast, globalHotkeys]);
 
   useEffect(() => {
