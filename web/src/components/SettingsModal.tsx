@@ -28,7 +28,7 @@ import {
   acceleratorFromEvent,
   acceleratorFromPointer,
   formatAccelerator,
-  isGlobalAccelerator,
+  isMouseAccelerator,
   micLevelPercent,
   sensitivityThreshold,
 } from '../lib/settings';
@@ -603,8 +603,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     if (broadcastTargets.some((target) => target.id !== targetId && target.value === value)) {
       return 'Клавиша уже назначена другой цели — сработает только первое назначение.';
     }
-    if (desktop && !isGlobalAccelerator(value)) {
-      return 'Одиночная клавиша сработает только при активном окне приложения — так она не мешает вводу текста.';
+    if (desktop && !value.includes('+') && !isMouseAccelerator(value)) {
+      return 'Одиночная клавиша будет срабатывать в любой программе, в том числе при вводе текста и в играх. Надёжнее добавить Ctrl, Alt или Shift.';
     }
     return null;
   };
@@ -1024,7 +1024,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 Нажмите на поле и назначьте любое сочетание клавиш — например Ctrl + Shift + K,
                 F8 или одиночную клавишу.
                 {desktop
-                  ? ' В приложении для Windows сочетания и служебные одиночные клавиши работают глобально — даже когда окно свёрнуто. Буквы и цифры без модификатора срабатывают только при активном окне, чтобы не мешать вводу текста.'
+                  ? ' В приложении для Windows все эти клавиши работают глобально — даже когда окно свёрнуто или активно другое приложение. Одиночные клавиши без модификатора тоже срабатывают везде, поэтому назначайте их осознанно.'
                   : ' В браузере клавиши работают, когда вкладка активна; глобальный режим доступен в приложении для Windows.'}
               </p>
               <div className="space-y-2.5">

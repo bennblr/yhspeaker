@@ -296,15 +296,12 @@ export function saveSettings(settings: MicSettings): void {
   }
 }
 
-// Клавиши, которые в приложении для Windows можно повесить на глобальный хук:
-// сочетания и служебные одиночные клавиши. Буквы и цифры без модификатора
-// обрабатываются только при активном окне, чтобы не срабатывать при вводе текста.
+// В приложении для Windows любая клавиша вещания регистрируется глобальным хуком:
+// клавишу выбирают осознанно, и она должна срабатывать даже когда активно другое
+// приложение. Одиночные клавиши без модификатора поэтому тоже работают везде —
+// интерфейс предупреждает, что они сработают и при вводе текста.
 export function isGlobalAccelerator(accelerator: string): boolean {
-  if (!accelerator) return false;
-  if (isMouseAccelerator(accelerator)) return true;
-  if (accelerator.includes('+')) return true;
-  const token = accelerator.split('+').pop() ?? '';
-  return /^F([1-9]|1[0-9]|2[0-4])$/.test(token) || GLOBAL_SINGLE_KEYS.has(token);
+  return isValidAccelerator(accelerator);
 }
 
 // Больше значение — выше чувствительность: микрофон реагирует на более тихий голос.
