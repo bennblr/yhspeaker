@@ -294,7 +294,7 @@ function overlayBounds(count) {
   const area = screen.getPrimaryDisplay().workArea;
   const rows = Math.min(Math.max(count, 1), 30);
   const width = OVERLAY_WIDTH;
-  const height = Math.min(44 + rows * OVERLAY_ROW, Math.round(area.height * 0.7));
+  const height = Math.min(14 + rows * OVERLAY_ROW, Math.round(area.height * 0.7));
   const margin = 12;
   const [vertical, horizontal] = normalizeOverlayAnchor(stored.overlayAnchor).split('-');
   const x =
