@@ -5,10 +5,10 @@ import {
   LogOut,
   MicOff,
   MonitorUp,
-  MoreVertical,
   Radio,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   UserX,
   Volume2,
   VolumeX,
@@ -90,9 +90,9 @@ function ParticipantTile({
             ref={menuButtonRef}
             className="icon-btn h-7 w-7 opacity-60 hover:opacity-100"
             onClick={() => setMenuOpen((value) => !value)}
-            aria-label="Действия"
+            aria-label="Громкость и действия"
           >
-            <MoreVertical className="h-4 w-4" />
+            <SlidersHorizontal className="h-4 w-4" />
           </button>
           {menuOpen && (
             <UserMenu

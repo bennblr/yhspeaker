@@ -5,11 +5,11 @@ import {
   Lock,
   MicOff,
   MonitorUp,
-  MoreVertical,
   Plus,
   Radio,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -92,7 +92,7 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
             title="Громкость и действия"
             onClick={(event) => setMenuAnchor(event.currentTarget)}
           >
-            <MoreVertical className="h-3 w-3" />
+            <SlidersHorizontal className="h-3 w-3" />
           </button>
         </>
       )}
@@ -206,7 +206,7 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
                   title="Громкость и действия"
                   onClick={(event) => setMenu({ user, anchor: event.currentTarget })}
                 >
-                  <MoreVertical className="h-3 w-3" />
+                  <SlidersHorizontal className="h-3 w-3" />
                 </button>
               </>
             )}
