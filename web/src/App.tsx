@@ -338,17 +338,33 @@ export function App() {
 
   useEffect(() => {
     if (settings.mode === 'open' || !voiceChannelId) return;
-    // В приложении для Windows назначение приходит из глобального хука.
-    // Оконные обработчики в этом случае только задвоили бы нажатие, но
-    // действие браузера по умолчанию гасим: иначе пробел, назначенный на
+    // В приложении для Windows клавишу в фоне нажимает глобальный хук, но
+    // пока окно активно, удержание обрабатываем сами: нажатие не должно
+    // зависеть от хука. Для push-to-talk дублирование безопасно — повторный
+    // setPtt с тем же состоянием ничего не меняет, в отличие от переключения.
+    // Действие браузера по умолчанию гасим: иначе пробел, назначенный на
     // микрофон, нажмёт кнопку, которая сейчас в фокусе.
     if (desktop && globalHotkeys) {
       const suppress = (event: KeyboardEvent) => {
         if (event.repeat || isTypingTarget(event.target)) return;
         if (matchesPttKey(event, settings.pttKey)) event.preventDefault();
       };
+      const holdDown = (event: KeyboardEvent) => {
+        if (settings.mode !== 'ptt' || !matchesPttKey(event, settings.pttKey)) return;
+        voice.setPtt(true);
+      };
+      const holdUp = (event: KeyboardEvent) => {
+        if (settings.mode !== 'ptt' || !matchesPttRelease(event, settings.pttKey)) return;
+        voice.setPtt(false);
+      };
       window.addEventListener('keydown', suppress);
-      return () => window.removeEventListener('keydown', suppress);
+      window.addEventListener('keydown', holdDown);
+      window.addEventListener('keyup', holdUp);
+      return () => {
+        window.removeEventListener('keydown', suppress);
+        window.removeEventListener('keydown', holdDown);
+        window.removeEventListener('keyup', holdUp);
+      };
     }
 
     const down = (event: KeyboardEvent) => {
