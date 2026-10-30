@@ -255,13 +255,22 @@ export const DEFAULT_SETTINGS: MicSettings = {
   outputVolume: 1,
   mode: 'open',
   pttKey: 'V',
-  broadcastKeys: { all: 'Alt+1', groups: {} },
+  // Клавиши вещания по умолчанию не назначены: в приложении они глобальные
+  // и в игре перехватывают управление, поэтому назначать их должен сам игрок.
+  broadcastKeys: { all: '', groups: {} },
   broadcastMode: 'toggle',
   priorityKeys: { all: '', groups: {} },
   priorityMode: 'ptt',
 };
 
 const STORAGE_KEY = 'la2speak.settings.v1';
+
+// «Alt+1» — прежнее значение по умолчанию: оно осело в сохранённых настройках
+// у всех, кто менял любые другие параметры. Один раз чистим его, иначе
+// «не назначено» было бы только у новых профилей. Метка не даёт стереть
+// «Alt+1» тем, кто назначит его уже осознанно.
+const LEGACY_DEFAULT_ALL_KEY = 'Alt+1';
+const LEGACY_DEFAULT_MIGRATION_KEY = 'la2speak.migrated.broadcast-default';
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -317,6 +326,22 @@ function settingsFromStorage(): MicSettings {
   };
 }
 
+function migratedLegacyDefault(): boolean {
+  try {
+    return localStorage.getItem(LEGACY_DEFAULT_MIGRATION_KEY) === '1';
+  } catch {
+    return true;
+  }
+}
+
+function markLegacyDefaultMigrated(): void {
+  try {
+    localStorage.setItem(LEGACY_DEFAULT_MIGRATION_KEY, '1');
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function loadSettings(): MicSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -331,6 +356,10 @@ export function loadSettings(): MicSettings {
       normalizeBroadcastKeys(parsed.priorityKeys, ''),
       pttKey,
     );
+    if (!migratedLegacyDefault()) {
+      if (keys.broadcastKeys.all === LEGACY_DEFAULT_ALL_KEY) keys.broadcastKeys.all = '';
+      markLegacyDefaultMigrated();
+    }
     const holdSupported = desktopSupportsBroadcastHold();
     return {
       ...DEFAULT_SETTINGS,

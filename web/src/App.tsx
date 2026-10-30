@@ -338,8 +338,17 @@ export function App() {
   useEffect(() => {
     if (settings.mode === 'open' || !voiceChannelId) return;
     // В приложении для Windows назначение приходит из глобального хука.
-    // Оконные обработчики в этом случае только задвоили бы нажатие.
-    if (desktop && globalHotkeys) return;
+    // Оконные обработчики в этом случае только задвоили бы нажатие, но
+    // действие браузера по умолчанию гасим: иначе пробел, назначенный на
+    // микрофон, нажмёт кнопку, которая сейчас в фокусе.
+    if (desktop && globalHotkeys) {
+      const suppress = (event: KeyboardEvent) => {
+        if (event.repeat || isTypingTarget(event.target)) return;
+        if (matchesPttKey(event, settings.pttKey)) event.preventDefault();
+      };
+      window.addEventListener('keydown', suppress);
+      return () => window.removeEventListener('keydown', suppress);
+    }
 
     const down = (event: KeyboardEvent) => {
       if (event.repeat || isTypingTarget(event.target)) return;
@@ -462,7 +471,9 @@ export function App() {
 
   useEffect(() => {
     if (!desktop) return;
-    if (!canBroadcast) {
+    // Клавиши отдаём хуку только когда он действительно работает: иначе их
+    // обрабатывают оконные слушатели, и нажатие не должно сработать дважды.
+    if (!canBroadcast || !globalHotkeys) {
       void desktop.setBroadcastKeys([]);
       return;
     }
@@ -476,6 +487,7 @@ export function App() {
     void desktop.setBroadcastKeys(bindings);
   }, [
     canBroadcast,
+    globalHotkeys,
     settings.broadcastKeys,
     settings.broadcastMode,
     settings.priorityKeys,
@@ -520,13 +532,18 @@ export function App() {
     if (!canBroadcast) return;
     const desktopHotkeys = Boolean(desktop && globalHotkeys);
 
-    // Клавиши, которые обрабатывает браузер: глобальные в приложении уже
-    // заняты хуком Windows.
-    const windowBindings = (): BroadcastBindingEntry[] =>
+    const allBindings = (): BroadcastBindingEntry[] =>
       collectBroadcastBindings(
         useApp.getState().settings,
         useApp.getState().broadcastGroups,
-      ).filter((binding) => !(desktopHotkeys && isGlobalAccelerator(binding.accelerator)));
+      );
+
+    // Клавиши, которые обрабатывает браузер: глобальные в приложении уже
+    // заняты хуком Windows.
+    const windowBindings = (): BroadcastBindingEntry[] =>
+      allBindings().filter(
+        (binding) => !(desktopHotkeys && isGlobalAccelerator(binding.accelerator)),
+      );
 
     const pressedBinding = (
       event: KeyboardEvent | PointerEvent,
@@ -561,10 +578,25 @@ export function App() {
       }
     };
 
+    // Клавиши вещания в приложении нажимает глобальный хук. Окну остаётся
+    // погасить действие по умолчанию: иначе пробел «нажмёт» кнопку, которая
+    // сейчас в фокусе («Остановить», микрофон и т. п.), и вещание тут же
+    // выключится.
+    const suppressDefault = (event: KeyboardEvent) => {
+      if (!desktopHotkeys) return;
+      if (event.repeat || isTypingTarget(event.target)) return;
+      if (allBindings().some((binding) => matchesPttKey(event, binding.accelerator))) {
+        event.preventDefault();
+      }
+    };
+
     const down = (event: KeyboardEvent) => {
       if (event.repeat || isTypingTarget(event.target)) return;
       const binding = pressedBinding(event);
-      if (!binding) return;
+      if (!binding) {
+        suppressDefault(event);
+        return;
+      }
       event.preventDefault();
       activate(binding);
     };
