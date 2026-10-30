@@ -694,9 +694,16 @@ function isLandingHost(host: string): boolean {
   return labels.length > 2 && host === labels.slice(-2).join('.');
 }
 
+// Клиент для Windows — тоже Chromium, но сайт ему не нужен: в окне приложения
+// должна открываться страница голосового сервера, даже если адрес совпадает с
+// доменом лендинга. Браузеры по-прежнему получают сайт.
+function isDesktopClient(req: Request): boolean {
+  return /\bElectron\//i.test(req.headers['user-agent'] ?? '');
+}
+
 function serveLanding(req: Request, res: Response, next: NextFunction): void {
   const host = normalizeHostHeader(req.headers.host);
-  if (req.query.guest !== undefined || !isLandingHost(host)) {
+  if (req.query.guest !== undefined || isDesktopClient(req) || !isLandingHost(host)) {
     next();
     return;
   }
