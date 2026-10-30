@@ -683,11 +683,20 @@ app.use(
 );
 app.get(['/platform', '/platform/', '/platform.html'], (_req, res) => sendPlatformPage(res));
 
-// Лендинг платформы на главной и страница гайдов. Домены серверов уходят дальше,
-// в прокси тенантов, и работают как раньше.
+// Лендинг живёт на публичном хосте панели и на корневом домене платформы
+// (admin.la2speak.com и la2speak.com). Остальные домены, включая chat.* и домены
+// голосовых серверов, уходят в прокси тенантов. Гостевые ссылки не перехватываем.
+function isLandingHost(host: string): boolean {
+  if (!config.publicHost) return true;
+  if (!host) return true;
+  if (host === config.publicHost) return true;
+  const labels = config.publicHost.split('.');
+  return labels.length > 2 && host === labels.slice(-2).join('.');
+}
+
 function serveLanding(req: Request, res: Response, next: NextFunction): void {
   const host = normalizeHostHeader(req.headers.host);
-  if (host && store.serverByDomain(host)) {
+  if (req.query.guest !== undefined || !isLandingHost(host)) {
     next();
     return;
   }
