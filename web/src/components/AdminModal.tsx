@@ -44,6 +44,8 @@ import { Modal } from './Modal';
 import { Avatar } from './Avatar';
 import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
+import { LabelForm } from './LabelForm';
+import { showCredentials } from './CredentialsDialog';
 import { api, type InviteSettings } from '../lib/api';
 import { useApp } from '../lib/store';
 import { getSocket } from '../lib/socket';
@@ -1448,6 +1450,7 @@ function OnlineRow({
 }) {
   const socket = getSocket();
   const self = user.id === selfId;
+  const [editingLabel, setEditingLabel] = useState(false);
   const color = roleColor(user, roles);
   const customRoles = userRoleList(user, roles);
   const moveTargets = channels.filter(
@@ -1496,16 +1499,7 @@ function OnlineRow({
               className="icon-btn h-8 w-8"
               title="Подписать участника"
               disabled={Boolean(busy)}
-              onClick={() => {
-                const next = window.prompt(
-                  'Метка рядом с ником (до 20 символов, пусто — убрать):',
-                  user.label ?? '',
-                );
-                if (next === null) return;
-                onAction('label', (callback) =>
-                  socket?.emit('mod:setLabel', { userId: user.id, label: next }, callback),
-                );
-              }}
+              onClick={() => setEditingLabel(true)}
             >
               <Tag className="h-4 w-4" />
             </button>
@@ -1590,10 +1584,12 @@ function OnlineRow({
                     callback(result);
                     if (result.ok) {
                       toast('ok', 'Назначена роль Пользователь');
-                      window.prompt(
-                        'Гость стал пользователем. Логин и пароль:',
-                        `Логин: ${result.username} · Пароль: ${result.password}`,
-                      );
+                      if (result.username && result.password) {
+                        showCredentials({
+                          username: result.username,
+                          password: result.password,
+                        });
+                      }
                     }
                   }),
                 );
@@ -1663,6 +1659,19 @@ function OnlineRow({
           )}
         </div>
       )}
+      {editingLabel && (
+        <LabelForm
+          className="basis-full"
+          initial={user.label ?? ''}
+          onCancel={() => setEditingLabel(false)}
+          onSubmit={(label) => {
+            setEditingLabel(false);
+            onAction('label', (callback) =>
+              socket?.emit('mod:setLabel', { userId: user.id, label }, callback),
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1701,6 +1710,7 @@ function AccountRow({
   const [panelOpen, setPanelOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>(account.roleIds);
   const [saving, setSaving] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(false);
 
   useEffect(() => {
     if (!panelOpen) setSelected(account.roleIds);
@@ -1787,16 +1797,7 @@ function AccountRow({
               className="icon-btn h-8 w-8"
               title="Подписать участника"
               disabled={Boolean(busy)}
-              onClick={() => {
-                const next = window.prompt(
-                  'Метка рядом с ником (до 20 символов, пусто — убрать):',
-                  account.label ?? '',
-                );
-                if (next === null) return;
-                onAction((callback) =>
-                  socket?.emit('mod:setLabel', { userId: account.id, label: next }, callback),
-                );
-              }}
+              onClick={() => setEditingLabel(true)}
             >
               <Tag className="h-4 w-4" />
             </button>
@@ -1908,6 +1909,19 @@ function AccountRow({
             </button>
           )}
         </div>
+        {editingLabel && (
+          <LabelForm
+            className="basis-full"
+            initial={account.label ?? ''}
+            onCancel={() => setEditingLabel(false)}
+            onSubmit={(label) => {
+              setEditingLabel(false);
+              onAction((callback) =>
+                socket?.emit('mod:setLabel', { userId: account.id, label }, callback),
+              );
+            }}
+          />
+        )}
       </div>
 
       {assignable && panelOpen && (

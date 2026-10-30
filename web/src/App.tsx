@@ -9,6 +9,7 @@ import { ChannelPasswordModal } from './components/ChannelPasswordModal';
 import { MobileVoiceBar } from './components/MobileVoiceBar';
 import { ScreenViewer } from './components/ScreenViewer';
 import { Toasts } from './components/Toasts';
+import { CredentialsDialog } from './components/CredentialsDialog';
 import { DesktopTitleBar } from './components/DesktopTitleBar';
 import { api, type PublicServerConfig } from './lib/api';
 import { useApp } from './lib/store';
@@ -798,6 +799,7 @@ export function App() {
       <ChannelPasswordModal />
       <ScreenViewer />
       <Toasts />
+      <CredentialsDialog />
       </div>
     </Shell>
   );

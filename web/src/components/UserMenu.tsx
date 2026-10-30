@@ -10,6 +10,8 @@ import {
 import { Avatar } from './Avatar';
 import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
+import { LabelForm } from './LabelForm';
+import { showCredentials } from './CredentialsDialog';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
 import { BASE_ROLE_META } from '../lib/roles';
@@ -38,6 +40,7 @@ export function UserMenu({
   const toggleLocalMute = useApp((state) => state.toggleLocalMute);
   const socket = getSocket();
   const [selectedRoles, setSelectedRoles] = useState<string[]>(user.roleIds);
+  const [editingLabel, setEditingLabel] = useState(false);
 
   useEffect(() => {
     setSelectedRoles(user.roleIds);
@@ -110,10 +113,9 @@ export function UserMenu({
         return;
       }
       toast('ok', 'Назначена роль Пользователь');
-      window.prompt(
-        'Гость стал пользователем. Логин и пароль:',
-        `Логин: ${result.username} · Пароль: ${result.password}`,
-      );
+      if (result.username && result.password) {
+        showCredentials({ username: result.username, password: result.password });
+      }
     });
   }
 
@@ -186,22 +188,28 @@ export function UserMenu({
 
         {socket && canModerateUser && (
           <div className="mt-1 border-t border-line pt-1">
-            <button
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-              onClick={() => {
-                const next = window.prompt(
-                  'Метка рядом с ником (до 20 символов, пусто — убрать):',
-                  user.label ?? '',
-                );
-                if (next === null) return;
-                run((callback) =>
-                  socket.emit('mod:setLabel', { userId: user.id, label: next }, callback),
-                );
-              }}
-            >
-              <Tag className="h-3.5 w-3.5 text-accent" />
-              {user.label ? 'Изменить метку' : 'Подписать участника'}
-            </button>
+            {editingLabel ? (
+              <div className="px-2.5 py-1.5">
+                <LabelForm
+                  initial={user.label ?? ''}
+                  onCancel={() => setEditingLabel(false)}
+                  onSubmit={(label) => {
+                    setEditingLabel(false);
+                    run((callback) =>
+                      socket.emit('mod:setLabel', { userId: user.id, label }, callback),
+                    );
+                  }}
+                />
+              </div>
+            ) : (
+              <button
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
+                onClick={() => setEditingLabel(true)}
+              >
+                <Tag className="h-3.5 w-3.5 text-accent" />
+                {user.label ? 'Изменить метку' : 'Подписать участника'}
+              </button>
+            )}
             <button
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
               onClick={() =>
