@@ -439,6 +439,58 @@ export function App() {
     return desktop.onMicToggle(() => voice.toggleMicByKey());
   }, []);
 
+  useEffect(() => {
+    if (!desktop?.setOverlayState) return;
+    // Оверлей канала живёт в отдельном окне поверх всех: ему нужен только
+    // состав голосового канала и кто говорит.
+    const build = () => {
+      const state = useApp.getState();
+      const channelId = state.voice.channelId;
+      if (!channelId) return null;
+      const channel = state.channels.find((item) => item.id === channelId);
+      const speaking = new Set(state.speaking);
+      const selfSessionId = state.me?.sessionId ?? '';
+      const pttSpeaking = state.settings.mode === 'ptt' && state.voice.pttActive;
+      const participants = state.users
+        .filter((user) => user.channelId === channelId)
+        .map((user) => ({
+          sessionId: user.sessionId,
+          name: user.displayName,
+          self: user.sessionId === selfSessionId,
+          speaking:
+            user.sessionId === selfSessionId && pttSpeaking
+              ? true
+              : speaking.has(user.sessionId),
+          muted: user.muted || user.serverMuted,
+          deafened: user.deafened,
+          broadcasting: user.broadcasting,
+          screen: user.screenSharing,
+        }))
+        .sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name, 'ru'));
+      return { channelName: channel?.name ?? '', participants };
+    };
+
+    const push = () => desktop?.setOverlayState?.(build());
+    push();
+    const off = useApp.subscribe((state, prev) => {
+      if (
+        state.users === prev.users &&
+        state.speaking === prev.speaking &&
+        state.voice === prev.voice &&
+        state.channels === prev.channels &&
+        state.me === prev.me &&
+        state.settings === prev.settings
+      ) {
+        return;
+      }
+      push();
+    });
+    return () => {
+      off();
+      desktop?.setOverlayState?.(null);
+    };
+  }, []);
+
   const voiceChannelName = channels.find((item) => item.id === voiceChannelId)?.name ?? '';
 
   useEffect(() => {

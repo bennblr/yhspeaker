@@ -43,12 +43,30 @@ export interface DesktopMicState {
   channelName: string;
 }
 
+export interface DesktopOverlayParticipant {
+  sessionId: string;
+  name: string;
+  self: boolean;
+  speaking: boolean;
+  muted: boolean;
+  deafened: boolean;
+  broadcasting: boolean;
+  screen: boolean;
+}
+
+export interface DesktopOverlayState {
+  channelName: string;
+  participants: DesktopOverlayParticipant[];
+}
+
 export interface DesktopBridge {
   isDesktop: true;
   platform: string;
   setPttKey: (accelerator: string) => Promise<boolean>;
   setMicMode: (mode: DesktopMicMode) => Promise<DesktopMicMode>;
   setMicState: (state: DesktopMicState) => void;
+  // Появилось в клиенте 1.0.7: оверлей канала поверх всех окон.
+  setOverlayState?: (state: DesktopOverlayState | null) => void;
   onPtt: (callback: (down: boolean) => void) => () => void;
   onMicToggle: (callback: () => void) => () => void;
   setBroadcastKeys: (bindings: BroadcastBinding[]) => Promise<number>;

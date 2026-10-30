@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('la2speak', {
   setPttKey: (accelerator) => ipcRenderer.invoke('ptt:set-key', accelerator),
   setMicMode: (mode) => ipcRenderer.invoke('mic:set-mode', mode),
   setMicState: (state) => ipcRenderer.send('mic:state', state),
+  setOverlayState: (state) => ipcRenderer.send('overlay:set-state', state),
   onPtt: (callback) => {
     const listener = (_event, down) => callback(Boolean(down));
     ipcRenderer.on('ptt', listener);

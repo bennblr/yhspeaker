@@ -48,6 +48,12 @@ let micState = {
   broadcasting: false,
   channelName: '',
 };
+// Оверлей канала: отдельное окно поверх всех окон, данные присылает приложение.
+let overlayWindow = null;
+let overlayReady = false;
+let overlayState = null;
+const OVERLAY_WIDTH = 200;
+const OVERLAY_ROW = 24;
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
 
@@ -75,10 +81,11 @@ function loadConfig() {
     return {
       serverUrl: typeof parsed.serverUrl === 'string' ? parsed.serverUrl : '',
       pttKey: typeof parsed.pttKey === 'string' ? parsed.pttKey : 'V',
+      overlayEnabled: parsed.overlayEnabled !== false,
       servers: sanitizeServers(parsed.servers),
     };
   } catch {
-    return { serverUrl: '', pttKey: 'V', servers: [] };
+    return { serverUrl: '', pttKey: 'V', overlayEnabled: true, servers: [] };
   }
 }
 
@@ -196,6 +203,8 @@ function createMainWindow(serverUrl) {
     if (!isMainFrame || code === -3 || quitting) return;
     if (!url || url.startsWith('devtools:')) return;
     mainWindow?.hide();
+    overlayState = null;
+    applyOverlay();
     void dialog
       .showMessageBox({
         type: 'error',
@@ -227,9 +236,110 @@ function createMainWindow(serverUrl) {
   mainWindow.on('closed', () => {
     mainWindow = null;
     sendPtt(false);
+    destroyOverlay();
   });
 
   void mainWindow.loadURL(serverUrl);
+}
+
+function sanitizeOverlayState(value) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.participants)) return null;
+  const participants = [];
+  for (const item of value.participants.slice(0, 100)) {
+    if (!item || typeof item !== 'object') continue;
+    const name = typeof item.name === 'string' ? item.name.trim().slice(0, 48) : '';
+    if (!name) continue;
+    participants.push({
+      sessionId: typeof item.sessionId === 'string' ? item.sessionId.slice(0, 80) : '',
+      name,
+      self: Boolean(item.self),
+      speaking: Boolean(item.speaking),
+      muted: Boolean(item.muted),
+      deafened: Boolean(item.deafened),
+      broadcasting: Boolean(item.broadcasting),
+      screen: Boolean(item.screen),
+    });
+  }
+  if (participants.length === 0) return null;
+  return {
+    channelName:
+      typeof value.channelName === 'string' ? value.channelName.trim().slice(0, 60) : '',
+    participants,
+  };
+}
+
+function overlayBounds(count) {
+  const area = screen.getPrimaryDisplay().workArea;
+  const rows = Math.min(Math.max(count, 1), 30);
+  return {
+    x: area.x + 12,
+    y: area.y + 12,
+    width: OVERLAY_WIDTH,
+    height: Math.min(44 + rows * OVERLAY_ROW, Math.round(area.height * 0.7)),
+  };
+}
+
+function ensureOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow;
+  overlayReady = false;
+  overlayWindow = new BrowserWindow({
+    ...overlayBounds(1),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    show: false,
+    focusable: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'overlay-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  // Уровень screen-saver держит окно над панелью задач и безрамочным
+  // полноэкранным режимом игр; клики проходят сквозь оверлей.
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.setIgnoreMouseEvents(true);
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+    overlayReady = false;
+  });
+  overlayWindow.webContents.on('did-finish-load', () => {
+    overlayReady = true;
+    if (overlayState) overlayWindow?.webContents.send('overlay:state', overlayState);
+  });
+  void overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
+  return overlayWindow;
+}
+
+function applyOverlay() {
+  const visible = Boolean(stored.overlayEnabled && overlayState);
+  if (!visible) {
+    if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+      overlayWindow.hide();
+    }
+    return;
+  }
+  const win = ensureOverlayWindow();
+  win.setBounds(overlayBounds(overlayState.participants.length));
+  if (overlayReady) win.webContents.send('overlay:state', overlayState);
+  if (!win.isVisible()) win.showInactive();
+}
+
+function destroyOverlay() {
+  overlayState = null;
+  overlayReady = false;
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
+  overlayWindow = null;
 }
 
 function openLauncher() {
@@ -612,6 +722,11 @@ ipcMain.handle('window:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
+ipcMain.on('overlay:set-state', (_event, value) => {
+  overlayState = sanitizeOverlayState(value);
+  applyOverlay();
+});
+
 ipcMain.handle('app:change-server', () => {
   openLauncher();
 });
@@ -738,6 +853,17 @@ function buildMenu() {
         { role: 'zoomIn', label: 'Увеличить' },
         { role: 'zoomOut', label: 'Уменьшить' },
         { type: 'separator' },
+        {
+          label: 'Оверлей канала',
+          type: 'checkbox',
+          checked: stored.overlayEnabled,
+          click: (item) => {
+            stored.overlayEnabled = item.checked;
+            saveConfig(stored);
+            applyOverlay();
+          },
+        },
+        { type: 'separator' },
         { role: 'togglefullscreen', label: 'Полный экран' },
         { role: 'toggleDevTools', label: 'Инструменты разработчика' },
       ],
@@ -854,6 +980,7 @@ if (!singleInstance) {
 
   app.on('before-quit', () => {
     quitting = true;
+    destroyOverlay();
     if (hook) {
       try {
         hook.stop();

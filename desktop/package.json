@@ -1,6 +1,6 @@
 {
   "name": "@tsds/desktop",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "LA2Speak desktop client for Windows",
   "author": "LA2Speak",
@@ -27,6 +27,9 @@
       "server-url.js",
       "launcher.html",
       "launcher.js",
+      "overlay.html",
+      "overlay.js",
+      "overlay-preload.js",
       "build/icon.png",
       "build/tray/*.png"
     ],
