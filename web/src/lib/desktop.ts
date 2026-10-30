@@ -59,6 +59,22 @@ export interface DesktopOverlayState {
   participants: DesktopOverlayParticipant[];
 }
 
+export type DesktopOverlayAnchor =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'middle-left'
+  | 'middle-center'
+  | 'middle-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
+
+export interface DesktopOverlayConfig {
+  enabled: boolean;
+  anchor: DesktopOverlayAnchor;
+}
+
 export interface DesktopBridge {
   isDesktop: true;
   platform: string;
@@ -67,6 +83,10 @@ export interface DesktopBridge {
   setMicState: (state: DesktopMicState) => void;
   // Появилось в клиенте 1.0.7: оверлей канала поверх всех окон.
   setOverlayState?: (state: DesktopOverlayState | null) => void;
+  // Появилось в клиенте 1.0.8: настройки оверлея из окна настроек.
+  getOverlayConfig?: () => Promise<DesktopOverlayConfig>;
+  setOverlayConfig?: (patch: Partial<DesktopOverlayConfig>) => Promise<DesktopOverlayConfig>;
+  onOverlayConfig?: (callback: (config: DesktopOverlayConfig) => void) => () => void;
   onPtt: (callback: (down: boolean) => void) => () => void;
   onMicToggle: (callback: () => void) => () => void;
   setBroadcastKeys: (bindings: BroadcastBinding[]) => Promise<number>;

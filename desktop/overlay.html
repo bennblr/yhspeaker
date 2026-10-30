@@ -11,12 +11,10 @@
     <style>
       :root {
         color-scheme: dark;
-        --panel: rgba(10, 12, 18, 0.7);
-        --line: rgba(255, 255, 255, 0.07);
         --text: #e7eaf3;
-        --muted: #8a93a8;
+        --muted: #a7b0c4;
         --ok: #3ddc97;
-        --accent: #6c7cff;
+        --accent: #8b97ff;
       }
 
       * {
@@ -43,12 +41,7 @@
         display: flex;
         flex-direction: column;
         height: 100%;
-        padding: 6px 7px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        background: var(--panel);
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
-        backdrop-filter: blur(10px);
+        padding: 4px 6px;
       }
 
       .card[hidden] {
@@ -60,7 +53,6 @@
         align-items: center;
         gap: 6px;
         padding: 0 2px 5px;
-        border-bottom: 1px solid var(--line);
         flex: 0 0 auto;
       }
 
@@ -80,10 +72,11 @@
         font-weight: 700;
         letter-spacing: 0.09em;
         text-transform: uppercase;
-        color: #c4cbdc;
+        color: #cdd4e4;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
       }
 
       .head .count {
@@ -91,6 +84,7 @@
         font-weight: 600;
         color: var(--muted);
         flex-shrink: 0;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
       }
 
       .rows {
@@ -112,10 +106,6 @@
         flex: 0 0 auto;
       }
 
-      .row.speaking {
-        background: rgba(61, 220, 151, 0.08);
-      }
-
       .avatar {
         width: 16px;
         height: 16px;
@@ -127,10 +117,13 @@
         font-weight: 700;
         color: #fff;
         flex-shrink: 0;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
       }
 
       .row.speaking .avatar {
-        box-shadow: 0 0 0 2px var(--ok);
+        box-shadow:
+          0 0 0 2px var(--ok),
+          0 1px 4px rgba(0, 0, 0, 0.65);
       }
 
       .name {
@@ -138,10 +131,11 @@
         min-width: 0;
         font-size: 11px;
         font-weight: 500;
-        color: #ccd3e2;
+        color: #dfe5f2;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
       }
 
       .row.speaking .name {
@@ -150,7 +144,7 @@
       }
 
       .row.off .name {
-        color: #79839a;
+        color: #98a2b6;
       }
 
       .me {
@@ -160,6 +154,7 @@
         text-transform: uppercase;
         color: var(--accent);
         flex-shrink: 0;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
       }
 
       .badges {
@@ -167,7 +162,7 @@
         align-items: center;
         gap: 3px;
         flex-shrink: 0;
-        color: #7c869c;
+        color: #9aa4b8;
       }
 
       .badges svg {
@@ -178,6 +173,7 @@
         stroke-width: 2;
         stroke-linecap: round;
         stroke-linejoin: round;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
       }
 
       .badges .live {
@@ -192,6 +188,7 @@
         font-size: 9.5px;
         color: var(--muted);
         flex: 0 0 auto;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
       }
     </style>
   </head>

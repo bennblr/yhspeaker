@@ -54,6 +54,21 @@ let overlayReady = false;
 let overlayState = null;
 const OVERLAY_WIDTH = 200;
 const OVERLAY_ROW = 24;
+const OVERLAY_ANCHORS = [
+  'top-left',
+  'top-center',
+  'top-right',
+  'middle-left',
+  'middle-center',
+  'middle-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+];
+
+function normalizeOverlayAnchor(value) {
+  return OVERLAY_ANCHORS.includes(value) ? value : 'top-left';
+}
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
 
@@ -82,10 +97,17 @@ function loadConfig() {
       serverUrl: typeof parsed.serverUrl === 'string' ? parsed.serverUrl : '',
       pttKey: typeof parsed.pttKey === 'string' ? parsed.pttKey : 'V',
       overlayEnabled: parsed.overlayEnabled !== false,
+      overlayAnchor: normalizeOverlayAnchor(parsed.overlayAnchor),
       servers: sanitizeServers(parsed.servers),
     };
   } catch {
-    return { serverUrl: '', pttKey: 'V', overlayEnabled: true, servers: [] };
+    return {
+      serverUrl: '',
+      pttKey: 'V',
+      overlayEnabled: true,
+      overlayAnchor: 'top-left',
+      servers: [],
+    };
   }
 }
 
@@ -271,11 +293,27 @@ function sanitizeOverlayState(value) {
 function overlayBounds(count) {
   const area = screen.getPrimaryDisplay().workArea;
   const rows = Math.min(Math.max(count, 1), 30);
+  const width = OVERLAY_WIDTH;
+  const height = Math.min(44 + rows * OVERLAY_ROW, Math.round(area.height * 0.7));
+  const margin = 12;
+  const [vertical, horizontal] = normalizeOverlayAnchor(stored.overlayAnchor).split('-');
+  const x =
+    horizontal === 'left'
+      ? area.x + margin
+      : horizontal === 'right'
+        ? area.x + area.width - width - margin
+        : area.x + Math.round((area.width - width) / 2);
+  const y =
+    vertical === 'top'
+      ? area.y + margin
+      : vertical === 'bottom'
+        ? area.y + area.height - height - margin
+        : area.y + Math.round((area.height - height) / 2);
   return {
-    x: area.x + 12,
-    y: area.y + 12,
-    width: OVERLAY_WIDTH,
-    height: Math.min(44 + rows * OVERLAY_ROW, Math.round(area.height * 0.7)),
+    x: Math.min(Math.max(x, area.x), area.x + area.width - width),
+    y: Math.min(Math.max(y, area.y), area.y + area.height - height),
+    width,
+    height,
   };
 }
 
@@ -340,6 +378,39 @@ function destroyOverlay() {
   overlayReady = false;
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
   overlayWindow = null;
+}
+
+function overlayConfig() {
+  return {
+    enabled: Boolean(stored.overlayEnabled),
+    anchor: normalizeOverlayAnchor(stored.overlayAnchor),
+  };
+}
+
+function syncOverlayMenu() {
+  const item = Menu.getApplicationMenu()?.getMenuItemById('overlay-toggle');
+  if (item) item.checked = Boolean(stored.overlayEnabled);
+}
+
+function sendOverlayConfig() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('overlay:config', overlayConfig());
+  }
+}
+
+// Меню «Вид» и окно настроек меняют одно состояние, поэтому рендерер получает копию.
+function applyOverlayConfig(patch) {
+  if (patch && typeof patch === 'object') {
+    if (typeof patch.enabled === 'boolean') stored.overlayEnabled = patch.enabled;
+    if (typeof patch.anchor === 'string' && OVERLAY_ANCHORS.includes(patch.anchor)) {
+      stored.overlayAnchor = patch.anchor;
+    }
+    saveConfig(stored);
+  }
+  syncOverlayMenu();
+  applyOverlay();
+  sendOverlayConfig();
+  return overlayConfig();
 }
 
 function openLauncher() {
@@ -722,6 +793,10 @@ ipcMain.handle('window:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
+ipcMain.handle('overlay:get-config', () => overlayConfig());
+
+ipcMain.handle('overlay:set-config', (_event, patch) => applyOverlayConfig(patch));
+
 ipcMain.on('overlay:set-state', (_event, value) => {
   overlayState = sanitizeOverlayState(value);
   applyOverlay();
@@ -854,14 +929,11 @@ function buildMenu() {
         { role: 'zoomOut', label: 'Уменьшить' },
         { type: 'separator' },
         {
+          id: 'overlay-toggle',
           label: 'Оверлей канала',
           type: 'checkbox',
           checked: stored.overlayEnabled,
-          click: (item) => {
-            stored.overlayEnabled = item.checked;
-            saveConfig(stored);
-            applyOverlay();
-          },
+          click: (item) => applyOverlayConfig({ enabled: item.checked }),
         },
         { type: 'separator' },
         { role: 'togglefullscreen', label: 'Полный экран' },

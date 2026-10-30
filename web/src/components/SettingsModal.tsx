@@ -7,6 +7,7 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Monitor,
   Radio,
   Plus,
   RefreshCw,
@@ -42,7 +43,7 @@ import {
   type NoiseSuppressorNode,
 } from '../lib/micGate';
 import { useCan } from '../lib/roles';
-import { desktop } from '../lib/desktop';
+import { desktop, type DesktopOverlayAnchor, type DesktopOverlayConfig } from '../lib/desktop';
 import {
   currentServerUrl,
   forgetServer,
@@ -274,6 +275,18 @@ function Section({
   );
 }
 
+const OVERLAY_ANCHORS: { id: DesktopOverlayAnchor; label: string }[] = [
+  { id: 'top-left', label: 'Сверху слева' },
+  { id: 'top-center', label: 'Сверху по центру' },
+  { id: 'top-right', label: 'Сверху справа' },
+  { id: 'middle-left', label: 'Слева по центру' },
+  { id: 'middle-center', label: 'По центру' },
+  { id: 'middle-right', label: 'Справа по центру' },
+  { id: 'bottom-left', label: 'Снизу слева' },
+  { id: 'bottom-center', label: 'Снизу по центру' },
+  { id: 'bottom-right', label: 'Снизу справа' },
+];
+
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const settings = useApp((state) => state.settings);
   const token = useApp((state) => state.token);
@@ -283,6 +296,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   // Удержание для вещания появилось в клиенте 1.0.6; старые сборки умеют
   // только переключение, поэтому вариант просто недоступен.
   const broadcastPttSupported = !desktop || Boolean(desktop.onBroadcastState);
+  const overlayConfigSupported = Boolean(desktop?.getOverlayConfig);
+  const [overlayConfig, setOverlayConfig] = useState<DesktopOverlayConfig | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [level, setLevel] = useState(0);
@@ -488,6 +503,32 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     setServerError(null);
     setSwitchingTo(null);
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !overlayConfigSupported) return;
+    let cancelled = false;
+    void desktop
+      ?.getOverlayConfig?.()
+      .then((value) => {
+        if (!cancelled) setOverlayConfig(value);
+      })
+      .catch(() => undefined);
+    const off = desktop?.onOverlayConfig?.((value) => setOverlayConfig(value));
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [open, overlayConfigSupported]);
+
+  async function saveOverlayConfig(patch: Partial<DesktopOverlayConfig>): Promise<void> {
+    if (!overlayConfig || !desktop?.setOverlayConfig) return;
+    setOverlayConfig({ ...overlayConfig, ...patch });
+    try {
+      setOverlayConfig(await desktop.setOverlayConfig(patch));
+    } catch {
+      toast('error', 'Не удалось применить настройки оверлея');
+    }
+  }
 
   function refreshServers(): void {
     setServerList(listKnownServers());
@@ -1070,6 +1111,66 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             )}
           </div>
         </Section>
+
+        {overlayConfigSupported && overlayConfig && (
+          <Section icon={Monitor} title="Оверлей канала">
+            <div className="space-y-4">
+              <Toggle
+                checked={overlayConfig.enabled}
+                onChange={(value) => void saveOverlayConfig({ enabled: value })}
+                title="Показывать поверх всех окон"
+                description="Список участников голосового канала в углу экрана: видно, кто говорит. Клики проходят сквозь оверлей, в игре он не мешает."
+              />
+              <div>
+                <label className="label">Положение на экране</label>
+                <div
+                  className={cn(
+                    'grid w-[132px] grid-cols-3 gap-1.5',
+                    !overlayConfig.enabled && 'opacity-50',
+                  )}
+                >
+                  {OVERLAY_ANCHORS.map((anchor) => (
+                    <button
+                      key={anchor.id}
+                      type="button"
+                      title={anchor.label}
+                      aria-label={anchor.label}
+                      aria-pressed={overlayConfig.anchor === anchor.id}
+                      onClick={() => void saveOverlayConfig({ anchor: anchor.id })}
+                      className={cn(
+                        'flex h-8 rounded-md border p-1.5 transition',
+                        anchor.id.startsWith('top')
+                          ? 'items-start'
+                          : anchor.id.startsWith('bottom')
+                            ? 'items-end'
+                            : 'items-center',
+                        anchor.id.endsWith('left')
+                          ? 'justify-start'
+                          : anchor.id.endsWith('right')
+                            ? 'justify-end'
+                            : 'justify-center',
+                        overlayConfig.anchor === anchor.id
+                          ? 'border-accent/70 bg-accent/15'
+                          : 'border-line bg-panel hover:border-accent/40',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'h-1.5 w-1.5 rounded-full',
+                          overlayConfig.anchor === anchor.id ? 'bg-accent' : 'bg-muted/60',
+                        )}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  Оверлей виден только в голосовом канале. Переключатель также есть в меню
+                  «Вид → Оверлей канала».
+                </p>
+              </div>
+            </div>
+          </Section>
+        )}
 
         {canBroadcast && (
           <Section icon={Radio} title="Горячие клавиши вещания">

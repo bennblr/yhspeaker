@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('la2speak', {
   setMicMode: (mode) => ipcRenderer.invoke('mic:set-mode', mode),
   setMicState: (state) => ipcRenderer.send('mic:state', state),
   setOverlayState: (state) => ipcRenderer.send('overlay:set-state', state),
+  getOverlayConfig: () => ipcRenderer.invoke('overlay:get-config'),
+  setOverlayConfig: (patch) => ipcRenderer.invoke('overlay:set-config', patch),
+  onOverlayConfig: (callback) => {
+    const listener = (_event, config) => callback(config);
+    ipcRenderer.on('overlay:config', listener);
+    return () => ipcRenderer.removeListener('overlay:config', listener);
+  },
   onPtt: (callback) => {
     const listener = (_event, down) => callback(Boolean(down));
     ipcRenderer.on('ptt', listener);
