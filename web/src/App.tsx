@@ -442,7 +442,7 @@ export function App() {
   useEffect(() => {
     if (!desktop?.setOverlayState) return;
     // Оверлей канала живёт в отдельном окне поверх всех: ему нужен только
-    // состав голосового канала и кто говорит.
+    // состав голосового канала, вещающие на весь сервер и кто говорит.
     const build = () => {
       const state = useApp.getState();
       const channelId = state.voice.channelId;
@@ -451,8 +451,14 @@ export function App() {
       const speaking = new Set(state.speaking);
       const selfSessionId = state.me?.sessionId ?? '';
       const pttSpeaking = state.settings.mode === 'ptt' && state.voice.pttActive;
+      // Вещающих на весь сервер слышно в любом канале, поэтому они тоже в списке.
+      const broadcasters = new Set(
+        state.users
+          .filter((user) => user.channelId !== channelId && user.broadcasting && user.broadcastAll)
+          .map((user) => user.sessionId),
+      );
       const participants = state.users
-        .filter((user) => user.channelId === channelId)
+        .filter((user) => user.channelId === channelId || broadcasters.has(user.sessionId))
         .map((user) => ({
           sessionId: user.sessionId,
           name: user.displayName,
@@ -466,7 +472,12 @@ export function App() {
           broadcasting: user.broadcasting,
           screen: user.screenSharing,
         }))
-        .sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name, 'ru'));
+        .sort(
+          (a, b) =>
+            Number(b.self) - Number(a.self) ||
+            Number(broadcasters.has(b.sessionId)) - Number(broadcasters.has(a.sessionId)) ||
+            a.name.localeCompare(b.name, 'ru'),
+        );
       return { channelName: channel?.name ?? '', participants };
     };
 
