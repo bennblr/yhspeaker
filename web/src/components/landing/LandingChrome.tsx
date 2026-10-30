@@ -1,8 +1,8 @@
-import { ArrowLeft, Download, LayoutDashboard, Mic, Send } from 'lucide-react';
+import { ArrowLeft, Download, Mic, Send } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export const TELEGRAM_URL = 'https://t.me/bennlr';
-export const TELEGRAM_HANDLE = '@bennlr';
+export const TELEGRAM_URL = 'https://t.me/bennblr';
+export const TELEGRAM_HANDLE = '@bennblr';
 export const DOWNLOAD_URL = '/download/windows';
 
 export function Brand({ subtitle = 'голосовые серверы' }: { subtitle?: string }) {
@@ -46,12 +46,6 @@ export function SiteHeader({ page }: { page: 'home' | 'guides' }) {
             <a className="rounded-lg px-2.5 py-1.5 transition hover:bg-panel3 hover:text-slate-100" href="#features">
               Возможности
             </a>
-            <a className="rounded-lg px-2.5 py-1.5 transition hover:bg-panel3 hover:text-slate-100" href="#how">
-              Как это работает
-            </a>
-            <a className="rounded-lg px-2.5 py-1.5 transition hover:bg-panel3 hover:text-slate-100" href="#admins">
-              Администраторам
-            </a>
             <a className="rounded-lg px-2.5 py-1.5 transition hover:bg-panel3 hover:text-slate-100" href="/guides">
               Гайды
             </a>
@@ -67,10 +61,6 @@ export function SiteHeader({ page }: { page: 'home' | 'guides' }) {
         )}
         <div className="ml-auto flex items-center gap-1.5">
           <TelegramLink className="hidden sm:inline-flex" />
-          <a href="/platform" className="btn-ghost h-9 px-3 text-xs">
-            <LayoutDashboard className="h-3.5 w-3.5" />
-            Панель
-          </a>
         </div>
       </div>
     </header>
@@ -84,16 +74,12 @@ export function SiteFooter() {
         <div className="max-w-xs">
           <Brand />
           <p className="mt-3 text-xs leading-relaxed text-muted">
-            Платформа голосовых и текстовых серверов. Каждый сервер живёт на своём домене со своими
-            данными и участниками.
+            Голосовой и текстовый сервер для команды: каналы, роли, демонстрация экрана и вещание.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-x-10 gap-y-2 text-xs">
           <a className="text-muted transition hover:text-slate-100" href="/guides">
             Гайды для администраторов
-          </a>
-          <a className="text-muted transition hover:text-slate-100" href="/platform">
-            Панель управления
           </a>
           <a className="text-muted transition hover:text-slate-100" href={DOWNLOAD_URL}>
             <Download className="mr-1 inline h-3 w-3" />
