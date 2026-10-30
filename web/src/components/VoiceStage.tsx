@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
-  Ban,
   HeadphoneOff,
   Loader2,
   LogOut,
@@ -11,9 +9,6 @@ import {
   Radio,
   Shield,
   ShieldCheck,
-  SlidersHorizontal,
-  Tag,
-  UserCheck,
   UserX,
   Volume2,
   VolumeX,
@@ -21,28 +16,23 @@ import {
 } from 'lucide-react';
 import {
   hasPermission,
-  type BaseRole,
   type BroadcastGroup,
   type Channel,
   type OnlineUser,
-  type Role,
 } from '@tsds/shared';
 import { Avatar } from './Avatar';
-import { DeviceBadge } from './DeviceBadge';
 import { LabelBadge } from './LabelBadge';
-import { VolumeMenu } from './VolumeMenu';
+import { UserMenu } from './UserMenu';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
-import { BASE_ROLE_META, primaryRole, roleLabel } from '../lib/roles';
+import { primaryRole, roleLabel } from '../lib/roles';
 import {
   leaveVoice,
   joinVoice,
   openScreenViewer,
   stopBroadcast,
   toggleScreenShare,
-  toast,
 } from '../lib/actions';
-import { getSocket } from '../lib/socket';
 
 function VideoPreview({ stream, muted = true }: { stream: MediaStream; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -50,283 +40,6 @@ function VideoPreview({ stream, muted = true }: { stream: MediaStream; muted?: b
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
   return <video ref={ref} autoPlay playsInline muted={muted} className="h-full w-full object-cover" />;
-}
-
-function ModeratorMenu({
-  user,
-  anchor,
-  onClose,
-}: {
-  user: OnlineUser;
-  anchor: HTMLElement | null;
-  onClose: () => void;
-}) {
-  const me = useApp((state) => state.me);
-  const channels = useApp((state) => state.channels);
-  const roles = useApp((state) => state.roles);
-  const socket = getSocket();
-  const [selectedRoles, setSelectedRoles] = useState<string[]>(user.roleIds);
-
-  useEffect(() => {
-    setSelectedRoles(user.roleIds);
-  }, [user.roleIds]);
-
-  useEffect(() => {
-    const close = () => onClose();
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => {
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [onClose]);
-
-  if (!socket || !me || !anchor) return null;
-
-  const client = socket;
-  const voiceChannels = channels.filter(
-    (channel) => channel.type === 'voice' && channel.id !== user.channelId,
-  );
-  const canAssignBaseRole = me.role === 'admin' && !user.isGuest;
-  const canPromoteGuest = me.role === 'moderator' && !user.isGuest && user.role === 'guest';
-  const canAuthorizeGuest =
-    user.isGuest && (me.role === 'admin' || me.role === 'moderator');
-  const canManageRoles = !user.isGuest && hasPermission(me, roles, 'roles');
-
-  const rect = anchor.getBoundingClientRect();
-  const width = Math.min(272, window.innerWidth - 16);
-  const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-  const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 240));
-  const maxHeight = Math.max(180, window.innerHeight - top - 8);
-
-  function run(
-    emit: (callback: (result: { ok: boolean; error?: string }) => void) => void,
-  ): void {
-    emit((result) => {
-      onClose();
-      if (!result.ok) toast('error', result.error ?? 'Не удалось выполнить действие');
-    });
-  }
-
-  function toggleCustomRole(role: Role): void {
-    const next = selectedRoles.includes(role.id)
-      ? selectedRoles.filter((id) => id !== role.id)
-      : [...selectedRoles, role.id];
-    setSelectedRoles(next);
-    client.emit('mod:setUserRoles', { userId: user.id, roleIds: next }, (result) => {
-      if (result.ok) return;
-      setSelectedRoles(user.roleIds);
-      toast('error', result.error ?? 'Не удалось изменить роли');
-    });
-  }
-
-  function authorizeGuest(): void {
-    if (
-      !window.confirm(
-        `Назначить ${user.displayName} роль Пользователь? Аккаунт сохранится в «Аккаунтах».`,
-      )
-    ) {
-      return;
-    }
-    client.emit('mod:authorizeGuest', { userId: user.id }, (result) => {
-      onClose();
-      if (!result.ok) {
-        toast('error', result.error ?? 'Не удалось авторизовать гостя');
-        return;
-      }
-      toast('ok', 'Назначена роль Пользователь');
-      window.prompt(
-        'Гость стал пользователем. Логин и пароль:',
-        `Логин: ${result.username} · Пароль: ${result.password}`,
-      );
-    });
-  }
-
-  return createPortal(
-    <>
-      <button
-        type="button"
-        className="fixed inset-0 z-[60] cursor-default"
-        onClick={onClose}
-        aria-label="Закрыть меню"
-      />
-      <div
-        className="fixed z-[70] animate-rise overflow-y-auto rounded-xl border border-line bg-[#0b0e15] p-1.5 text-left shadow-panel"
-        style={{ left, top, width, maxHeight }}
-      >
-        <div className="flex items-center gap-2 px-2.5 py-2">
-          <Avatar id={user.id} name={user.displayName} size="xs" />
-          <span className="truncate text-xs font-semibold text-slate-200">
-            {user.displayName}
-          </span>
-          <LabelBadge label={user.label} />
-          <DeviceBadge device={user.device} deviceName={user.deviceName} className="ml-auto" />
-        </div>
-        <div className="my-1 h-px bg-line" />
-        <button
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-          onClick={() => {
-            const next = window.prompt(
-              'Метка рядом с ником (до 20 символов, пусто — убрать):',
-              user.label ?? '',
-            );
-            if (next === null) return;
-            run((callback) =>
-              socket.emit('mod:setLabel', { userId: user.id, label: next }, callback),
-            );
-          }}
-        >
-          <Tag className="h-3.5 w-3.5 text-accent" />
-          {user.label ? 'Изменить метку' : 'Подписать участника'}
-        </button>
-        <button
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-          onClick={() =>
-            run((callback) =>
-              socket.emit(
-                'mod:serverMute',
-                { userId: user.id, muted: !user.serverMuted },
-                callback,
-              ),
-            )
-          }
-        >
-          <MicOff className="h-3.5 w-3.5 text-warn" />
-          {user.serverMuted ? 'Вернуть микрофон' : 'Отключить микрофон'}
-        </button>
-        {user.channelId && voiceChannels.length > 0 && (
-          <div className="px-2.5 py-1.5">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
-              Переместить в канал
-            </div>
-            <select
-              className="input h-8 py-0 text-xs"
-              value=""
-              onChange={(event) => {
-                const channelId = event.target.value;
-                if (!channelId) return;
-                run((callback) =>
-                  socket.emit(
-                    'mod:moveUser',
-                    { userId: user.id, sessionId: user.sessionId, channelId },
-                    callback,
-                  ),
-                );
-              }}
-            >
-              <option value="">Выберите канал…</option>
-              {voiceChannels.map((channel) => (
-                <option key={channel.id} value={channel.id}>
-                  {channel.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        {user.channelId && (
-          <button
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-            onClick={() =>
-              run((callback) =>
-                socket.emit('mod:kick', { userId: user.id, sessionId: user.sessionId }, callback),
-              )
-            }
-          >
-            <LogOut className="h-3.5 w-3.5 text-warn" />
-            Выгнать из канала
-          </button>
-        )}
-        {canAssignBaseRole && (
-          <div className="mt-1 border-t border-line px-2.5 pb-1 pt-2">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
-              Базовая роль
-            </div>
-            <select
-              className="input h-8 py-0 text-xs"
-              value={user.role}
-              onChange={(event) => {
-                const role = event.target.value as BaseRole;
-                if (role === user.role) return;
-                run((callback) =>
-                  socket.emit('mod:setRole', { userId: user.id, role }, callback),
-                );
-              }}
-            >
-              {BASE_ROLE_META.map((meta) => (
-                <option key={meta.key} value={meta.key}>
-                  {meta.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        {canAuthorizeGuest && (
-          <button
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-            onClick={authorizeGuest}
-          >
-            <UserCheck className="h-3.5 w-3.5 text-ok" />
-            Сделать пользователем
-          </button>
-        )}
-        {canPromoteGuest && (
-          <button
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
-            onClick={() =>
-              run((callback) =>
-                socket.emit('mod:setRole', { userId: user.id, role: 'member' }, callback),
-              )
-            }
-          >
-            <ShieldCheck className="h-3.5 w-3.5 text-ok" />
-            Назначить пользователем
-          </button>
-        )}
-        {canManageRoles && roles.length > 0 && (
-          <div className="mt-1 border-t border-line px-2.5 pb-1 pt-2">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
-              Пользовательские роли
-            </div>
-            <div className="max-h-28 space-y-0.5 overflow-y-auto">
-              {roles.map((role) => (
-                <label
-                  key={role.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs text-slate-300 transition hover:bg-panel3"
-                >
-                  <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 shrink-0 accent-accent"
-                    checked={selectedRoles.includes(role.id)}
-                    onChange={() => toggleCustomRole(role)}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: role.color }}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{role.name}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-        {!user.isGuest && user.role !== 'admin' && (
-          <button
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-danger transition hover:bg-danger/10"
-            onClick={() => {
-              if (!window.confirm(`Забанить ${user.displayName}? Аккаунт не сможет войти.`)) return;
-              run((callback) =>
-                socket.emit('mod:ban', { userId: user.id, banned: true }, callback),
-              );
-            }}
-          >
-            <Ban className="h-3.5 w-3.5" />
-            Забанить
-          </button>
-        )}
-      </div>
-    </>,
-    document.body,
-  );
 }
 
 function ParticipantTile({
@@ -341,16 +54,13 @@ function ParticipantTile({
   canModerate: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [volumeOpen, setVolumeOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const volumeButtonRef = useRef<HTMLButtonElement>(null);
   const groups = useApp((state) => state.broadcastGroups);
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
   const volume = useApp((state) => state.userVolumes[user.id] ?? 1);
   const toggleLocalMute = useApp((state) => state.toggleLocalMute);
   const primary = user.role === 'member' ? primaryRole(user, roles) : null;
-  const showModMenu = canModerate && !isSelf;
 
   return (
     <div
@@ -374,7 +84,7 @@ function ParticipantTile({
           </span>
         )}
       </div>
-      {showModMenu && (
+      {!isSelf && (
         <div className="absolute right-1.5 top-1.5">
           <button
             ref={menuButtonRef}
@@ -385,9 +95,10 @@ function ParticipantTile({
             <MoreVertical className="h-4 w-4" />
           </button>
           {menuOpen && (
-            <ModeratorMenu
+            <UserMenu
               user={user}
               anchor={menuButtonRef.current}
+              canModerate={canModerate}
               onClose={() => setMenuOpen(false)}
             />
           )}
@@ -468,21 +179,9 @@ function ParticipantTile({
               </span>
             )}
             <button
-              ref={volumeButtonRef}
               type="button"
               className={cn(
                 'ml-1 rounded p-0.5 transition hover:bg-white/[0.06]',
-                volume !== 1 && 'text-accent',
-              )}
-              title={`Громкость участника (${Math.round(volume * 100)}%)`}
-              onClick={() => setVolumeOpen((value) => !value)}
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              className={cn(
-                'rounded p-0.5 transition hover:bg-white/[0.06]',
                 localMuted && 'text-danger',
               )}
               title={localMuted ? 'Включить звук участника у себя' : 'Заглушить участника у себя'}
@@ -497,9 +196,6 @@ function ParticipantTile({
           </>
         )}
       </div>
-      {volumeOpen && (
-        <VolumeMenu user={user} anchor={volumeButtonRef.current} onClose={() => setVolumeOpen(false)} />
-      )}
     </div>
   );
 }

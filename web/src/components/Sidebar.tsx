@@ -5,11 +5,11 @@ import {
   Lock,
   MicOff,
   MonitorUp,
+  MoreVertical,
   Plus,
   Radio,
   Shield,
   ShieldCheck,
-  SlidersHorizontal,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -17,7 +17,7 @@ import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 import { Avatar } from './Avatar';
 import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
-import { VolumeMenu } from './VolumeMenu';
+import { UserMenu } from './UserMenu';
 import { useApp } from '../lib/store';
 import { cn, serverLabel } from '../lib/utils';
 import { canDragUser, joinVoice, moveUserToChannel, selectChannel } from '../lib/actions';
@@ -38,12 +38,14 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
   const roles = useApp((state) => state.roles);
   const localMuted = useApp((state) => state.localMuted.includes(user.id));
   const volume = useApp((state) => state.userVolumes[user.id] ?? 1);
+  const toggleLocalMute = useApp((state) => state.toggleLocalMute);
   const primary = user.role === 'member' ? primaryRole(user, roles) : null;
   const drag = useContext(DragContext);
   const draggable = drag !== null && canDragUser(user);
   const dragging = drag?.user?.sessionId === user.sessionId;
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const isSelf = me?.id === user.id;
+  const canModerate = hasPermission(me, roles, 'moderate');
 
   return (
     <div
@@ -69,17 +71,30 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
         {user.displayName}
       </span>
       {!isSelf && (
-        <button
-          type="button"
-          className={cn(
-            'shrink-0 rounded p-0.5 text-muted opacity-60 transition hover:bg-white/[0.06] hover:text-slate-200 hover:opacity-100',
-            volume !== 1 && 'text-accent opacity-100',
-          )}
-          title={`Громкость и заглушение (${Math.round(volume * 100)}%)`}
-          onClick={(event) => setMenuAnchor(event.currentTarget)}
-        >
-          <SlidersHorizontal className="h-3 w-3" />
-        </button>
+        <>
+          <button
+            type="button"
+            className={cn(
+              'shrink-0 rounded p-0.5 text-muted opacity-60 transition hover:bg-white/[0.06] hover:text-slate-200 hover:opacity-100',
+              localMuted && 'text-danger opacity-100',
+            )}
+            title={localMuted ? 'Включить звук участника у себя' : 'Заглушить участника у себя'}
+            onClick={() => toggleLocalMute(user.id)}
+          >
+            {localMuted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+          </button>
+          <button
+            type="button"
+            className={cn(
+              'shrink-0 rounded p-0.5 text-muted opacity-60 transition hover:bg-white/[0.06] hover:text-slate-200 hover:opacity-100',
+              volume !== 1 && 'text-accent opacity-100',
+            )}
+            title="Громкость и действия"
+            onClick={(event) => setMenuAnchor(event.currentTarget)}
+          >
+            <MoreVertical className="h-3 w-3" />
+          </button>
+        </>
       )}
       <LabelBadge label={user.label} />
       {user.role === 'admin' && (
@@ -107,11 +122,6 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
             {Math.round(volume * 100)}%
           </span>
         )}
-        {localMuted && (
-          <span title="Вы заглушили этого участника">
-            <VolumeX className="h-3 w-3 text-danger/80" />
-          </span>
-        )}
         {user.broadcasting && <Radio className="h-3 w-3 text-ok" />}
         {user.screenSharing && <MonitorUp className="h-3 w-3 text-accent" />}
         {user.deafened && <HeadphoneOff className="h-3 w-3 text-danger/80" />}
@@ -120,7 +130,12 @@ function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolea
         )}
       </span>
       {menuAnchor && (
-        <VolumeMenu user={user} anchor={menuAnchor} onClose={() => setMenuAnchor(null)} />
+        <UserMenu
+          user={user}
+          anchor={menuAnchor}
+          canModerate={canModerate}
+          onClose={() => setMenuAnchor(null)}
+        />
       )}
     </div>
   );
@@ -131,8 +146,10 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
   const roles = useApp((state) => state.roles);
   const localMutedIds = useApp((state) => state.localMuted);
   const userVolumes = useApp((state) => state.userVolumes);
+  const toggleLocalMute = useApp((state) => state.toggleLocalMute);
   const drag = useContext(DragContext);
   const [menu, setMenu] = useState<{ user: OnlineUser; anchor: HTMLElement } | null>(null);
+  const canModerate = hasPermission(me, roles, 'moderate');
 
   return (
     <div className="flex flex-wrap gap-1 px-2 pb-1.5 pt-0.5">
@@ -168,17 +185,30 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
               {user.displayName}
             </span>
             {me?.id !== user.id && (
-              <button
-                type="button"
-                className={cn(
-                  'shrink-0 rounded p-0.5 text-muted transition hover:bg-white/[0.06] hover:text-slate-200',
-                  volume !== 1 && 'text-accent',
-                )}
-                title={`Громкость и заглушение (${Math.round(volume * 100)}%)`}
-                onClick={(event) => setMenu({ user, anchor: event.currentTarget })}
-              >
-                <SlidersHorizontal className="h-3 w-3" />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={cn(
+                    'shrink-0 rounded p-0.5 text-muted transition hover:bg-white/[0.06] hover:text-slate-200',
+                    localMuted && 'text-danger',
+                  )}
+                  title={localMuted ? 'Включить звук участника у себя' : 'Заглушить участника у себя'}
+                  onClick={() => toggleLocalMute(user.id)}
+                >
+                  {localMuted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'shrink-0 rounded p-0.5 text-muted transition hover:bg-white/[0.06] hover:text-slate-200',
+                    volume !== 1 && 'text-accent',
+                  )}
+                  title="Громкость и действия"
+                  onClick={(event) => setMenu({ user, anchor: event.currentTarget })}
+                >
+                  <MoreVertical className="h-3 w-3" />
+                </button>
+              </>
             )}
             <LabelBadge label={user.label} />
             {volume !== 1 && (
@@ -189,7 +219,6 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
                 {Math.round(volume * 100)}%
               </span>
             )}
-            {localMuted && <VolumeX className="h-3 w-3 shrink-0 text-danger/80" />}
             {user.broadcasting && <Radio className="h-3 w-3 shrink-0 text-ok" />}
             {user.screenSharing && <MonitorUp className="h-3 w-3 shrink-0 text-accent" />}
             {user.deafened && <HeadphoneOff className="h-3 w-3 shrink-0 text-danger/80" />}
@@ -202,9 +231,10 @@ function CompactParticipants({ users, speaking }: { users: OnlineUser[]; speakin
         );
       })}
       {menu && (
-        <VolumeMenu
+        <UserMenu
           user={menu.user}
           anchor={menu.anchor}
+          canModerate={canModerate}
           onClose={() => setMenu(null)}
         />
       )}
