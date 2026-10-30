@@ -85,12 +85,6 @@ function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
   next();
 }
 
-function isPlatformHost(host: string): boolean {
-  if (!host) return true;
-  if (config.publicHost && host === config.publicHost) return true;
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-}
-
 function cleanDomains(raw: string[], exceptId?: string): string[] {
   const domains = [...new Set(raw.map((domain) => normalizeDomain(domain)))];
   for (const domain of domains) {
@@ -644,6 +638,7 @@ app.get('/download/windows', (_req, res) => {
 // ---------- platform admin UI ----------
 
 const platformHtml = path.join(config.webDistDir, 'platform.html');
+const landingHtml = path.join(config.webDistDir, 'landing.html');
 
 function sendPlatformPage(res: Response): void {
   if (!fs.existsSync(platformHtml)) {
@@ -655,6 +650,15 @@ function sendPlatformPage(res: Response): void {
   }
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(platformHtml);
+}
+
+function sendLandingPage(res: Response): void {
+  if (!fs.existsSync(landingHtml)) {
+    res.status(503).type('text/plain').send('Лендинг не собран. Выполните npm run build.');
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(landingHtml);
 }
 
 app.use(
@@ -679,14 +683,19 @@ app.use(
 );
 app.get(['/platform', '/platform/', '/platform.html'], (_req, res) => sendPlatformPage(res));
 
-app.get('/', (req, res, next) => {
+// Лендинг платформы на главной и страница гайдов. Домены серверов уходят дальше,
+// в прокси тенантов, и работают как раньше.
+function serveLanding(req: Request, res: Response, next: NextFunction): void {
   const host = normalizeHostHeader(req.headers.host);
-  if (isPlatformHost(host) || !store.serverByDomain(host)) {
-    res.redirect('/platform');
+  if (host && store.serverByDomain(host)) {
+    next();
     return;
   }
-  next();
-});
+  sendLandingPage(res);
+}
+
+app.get('/', serveLanding);
+app.get(['/guides', '/guides/'], serveLanding);
 
 // ---------- tenant proxy ----------
 

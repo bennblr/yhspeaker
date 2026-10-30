@@ -21,6 +21,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         platform: 'platform.html',
+        landing: 'landing.html',
       },
     },
   },
