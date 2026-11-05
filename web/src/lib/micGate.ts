@@ -90,13 +90,13 @@ export async function createMicGateNode(ctx: AudioContext): Promise<AudioWorklet
 export function applyMicGate(
   gate: AudioWorkletNode | null,
   micSensitivity: number,
-  openMode: boolean,
+  voiceMode: boolean,
 ): void {
   if (!gate) return;
   const threshold = gate.parameters.get('threshold');
   const enabled = gate.parameters.get('enabled');
   if (threshold) threshold.value = sensitivityThreshold(micSensitivity);
-  if (enabled) enabled.value = openMode ? 1 : 0;
+  if (enabled) enabled.value = voiceMode ? 1 : 0;
 }
 
 export function applyRemoteLevel(gate: AudioWorkletNode | null, level: number): void {

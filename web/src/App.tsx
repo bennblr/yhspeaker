@@ -8,6 +8,7 @@ import { AdminModal } from './components/AdminModal';
 import { ChannelPasswordModal } from './components/ChannelPasswordModal';
 import { MobileVoiceBar } from './components/MobileVoiceBar';
 import { ScreenViewer } from './components/ScreenViewer';
+import { ScreenSharePicker } from './components/ScreenSharePicker';
 import { Toasts } from './components/Toasts';
 import { CredentialsDialog } from './components/CredentialsDialog';
 import { DesktopTitleBar } from './components/DesktopTitleBar';
@@ -337,7 +338,7 @@ export function App() {
   }, [me]);
 
   useEffect(() => {
-    if (settings.mode === 'open' || !voiceChannelId) return;
+    if (settings.mode === 'voice' || !voiceChannelId) return;
     // В приложении для Windows клавишу в фоне нажимает глобальный хук, но
     // пока окно активно, удержание обрабатываем сами: нажатие не должно
     // зависеть от хука. Для push-to-talk дублирование безопасно — повторный
@@ -877,6 +878,7 @@ export function App() {
       <AdminModal open={adminOpen} onClose={() => setAdminOpen(false)} />
       <ChannelPasswordModal />
       <ScreenViewer />
+      <ScreenSharePicker />
       <Toasts />
       <CredentialsDialog />
       </div>

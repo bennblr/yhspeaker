@@ -1,6 +1,8 @@
 import { useApp } from './store';
 import { getSocket, disconnectSocket } from './socket';
 import { voice } from './voice';
+import { desktop } from './desktop';
+import { openScreenSharePicker } from './screenPicker';
 import type { MicSettings } from './settings';
 import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
 
@@ -230,8 +232,17 @@ export function releaseBroadcastHolds(): void {
 }
 
 export function toggleScreenShare(): void {
-  if (useApp.getState().voice.localScreen) void voice.stopScreenShare();
-  else void voice.startScreenShare();
+  if (useApp.getState().voice.localScreen) {
+    void voice.stopScreenShare();
+    return;
+  }
+  // В приложении для Windows выбираем экран или окно сами: системный диалог
+  // Electron на Windows не показывает. В браузере остаётся штатный выбор.
+  if (desktop?.getScreenSources && desktop.selectScreenSource) {
+    openScreenSharePicker();
+    return;
+  }
+  void voice.startScreenShare();
 }
 
 export function sendChatMessage(channelId: string, text: string): void {

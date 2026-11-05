@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('la2speak', {
   setMicMode: (mode) => ipcRenderer.invoke('mic:set-mode', mode),
   setMicState: (state) => ipcRenderer.send('mic:state', state),
   setOverlayState: (state) => ipcRenderer.send('overlay:set-state', state),
+  getScreenSources: () => ipcRenderer.invoke('screen:get-sources'),
+  selectScreenSource: (sourceId) => ipcRenderer.invoke('screen:select-source', sourceId),
   getOverlayConfig: () => ipcRenderer.invoke('overlay:get-config'),
   setOverlayConfig: (patch) => ipcRenderer.invoke('overlay:set-config', patch),
   onOverlayConfig: (callback) => {

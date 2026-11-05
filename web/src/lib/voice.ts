@@ -328,7 +328,8 @@ export class VoiceEngine {
   }
 
   private applyGateSettings(settings: MicSettings): void {
-    applyMicGate(this.gateNode, settings.micSensitivity, settings.mode !== 'ptt');
+    // Порог чувствительности работает только в режиме активации голосом.
+    applyMicGate(this.gateNode, settings.micSensitivity, settings.mode === 'voice');
   }
 
   private stopMic(): void {

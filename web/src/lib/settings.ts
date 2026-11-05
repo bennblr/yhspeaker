@@ -1,4 +1,6 @@
-export type PttMode = 'open' | 'ptt' | 'toggle';
+// Активация голосом — порог чувствительности пропускает только речь;
+// по кнопке — микрофон включается и выключается клавишей; ptt — пока зажата.
+export type PttMode = 'voice' | 'ptt' | 'toggle';
 
 // Как срабатывают горячие клавиши вещания: переключение (как раньше) или
 // удержание, пока клавиша или кнопка мыши зажата.
@@ -253,7 +255,7 @@ export const DEFAULT_SETTINGS: MicSettings = {
   inputGain: 1,
   micSensitivity: 65,
   outputVolume: 1,
-  mode: 'open',
+  mode: 'voice',
   pttKey: 'V',
   // Клавиши вещания по умолчанию не назначены: в приложении они глобальные
   // и в игре перехватывают управление, поэтому назначать их должен сам игрок.
@@ -367,8 +369,9 @@ export function loadSettings(): MicSettings {
       inputGain: clamp(Number(parsed.inputGain ?? 1), 0, 2),
       micSensitivity: clamp(Number(parsed.micSensitivity ?? 65), 0, 100),
       outputVolume: clamp(Number(parsed.outputVolume ?? 1), 0, 1),
+      // Старое сохранение с 'open' тоже становится активацией голосом.
       mode:
-        parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'open',
+        parsed.mode === 'ptt' ? 'ptt' : parsed.mode === 'toggle' ? 'toggle' : 'voice',
       pttKey,
       ...keys,
       broadcastMode: holdSupported && parsed.broadcastMode === 'ptt' ? 'ptt' : 'toggle',

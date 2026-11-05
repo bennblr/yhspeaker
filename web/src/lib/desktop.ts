@@ -20,7 +20,7 @@ export interface BroadcastStateEvent {
   active: boolean;
 }
 
-export type DesktopMicMode = 'open' | 'ptt' | 'toggle';
+export type DesktopMicMode = 'voice' | 'ptt' | 'toggle';
 
 export interface DesktopServerInfo {
   url: string;
@@ -75,6 +75,14 @@ export interface DesktopOverlayConfig {
   anchor: DesktopOverlayAnchor;
 }
 
+export interface DesktopScreenSource {
+  id: string;
+  name: string;
+  kind: 'screen' | 'window';
+  thumbnail: string;
+  appIcon: string;
+}
+
 export interface DesktopBridge {
   isDesktop: true;
   platform: string;
@@ -87,6 +95,9 @@ export interface DesktopBridge {
   getOverlayConfig?: () => Promise<DesktopOverlayConfig>;
   setOverlayConfig?: (patch: Partial<DesktopOverlayConfig>) => Promise<DesktopOverlayConfig>;
   onOverlayConfig?: (callback: (config: DesktopOverlayConfig) => void) => () => void;
+  // Появилось в клиенте 1.0.10: выбор экрана или окна для демонстрации.
+  getScreenSources?: () => Promise<DesktopScreenSource[]>;
+  selectScreenSource?: (sourceId: string) => Promise<boolean>;
   onPtt: (callback: (down: boolean) => void) => () => void;
   onMicToggle: (callback: () => void) => () => void;
   setBroadcastKeys: (bindings: BroadcastBinding[]) => Promise<number>;
@@ -103,11 +114,35 @@ export interface DesktopBridge {
   windowControls: DesktopWindowControls;
 }
 
+// Клиенты до переименования (YHSpeak 1.0.x) экспонировали мост под старым
+// именем и не знали части методов, которые вызывает новый веб-клиент.
+type LegacyDesktopBridge = Omit<
+  DesktopBridge,
+  'setMicMode' | 'setMicState' | 'onMicToggle' | 'setServerName' | 'listServers' | 'switchServer'
+>;
+
 declare global {
   interface Window {
     la2speak?: DesktopBridge;
+    yhspeak?: LegacyDesktopBridge;
   }
 }
 
-export const desktop: DesktopBridge | null =
-  typeof window !== 'undefined' && window.la2speak ? window.la2speak : null;
+function withDefaults(bridge: LegacyDesktopBridge): DesktopBridge {
+  const source = bridge as LegacyDesktopBridge & Partial<DesktopBridge>;
+  return {
+    ...source,
+    setMicMode: source.setMicMode ?? (async (mode) => mode),
+    setMicState: source.setMicState ?? (() => undefined),
+    onMicToggle: source.onMicToggle ?? (() => () => undefined),
+    setServerName: source.setServerName ?? (async () => undefined),
+    listServers: source.listServers ?? (async () => []),
+    switchServer:
+      source.switchServer ?? (async () => ({ ok: false, error: 'Обновите приложение LA2Speak.' })),
+  };
+}
+
+const bridge =
+  typeof window === 'undefined' ? undefined : (window.la2speak ?? window.yhspeak);
+
+export const desktop: DesktopBridge | null = bridge ? withDefaults(bridge) : null;

@@ -38,8 +38,8 @@ const modifierKeycodes = new Map();
 let pttHeld = false;
 let quitting = false;
 let tray = null;
-// Режим клавиши микрофона: open — не используется, ptt — удержание, toggle — вкл/выкл.
-let micMode = 'open';
+// Режим клавиши микрофона: voice — не используется, ptt — удержание, toggle — вкл/выкл.
+let micMode = 'voice';
 let micKeyHeld = false;
 let micState = {
   inCall: false,
@@ -52,6 +52,8 @@ let micState = {
 let overlayWindow = null;
 let overlayReady = false;
 let overlayState = null;
+// Источник, выбранный в окне «Показать экран»; следующий getDisplayMedia заберёт его.
+let pendingDisplaySourceId = null;
 const OVERLAY_WIDTH = 200;
 const OVERLAY_ROW = 24;
 const OVERLAY_ANCHORS = [
@@ -731,7 +733,7 @@ ipcMain.handle('ptt:set-key', (_event, accelerator) => {
 });
 
 ipcMain.handle('mic:set-mode', (_event, mode) => {
-  micMode = mode === 'ptt' || mode === 'toggle' ? mode : 'open';
+  micMode = mode === 'ptt' || mode === 'toggle' ? mode : 'voice';
   micKeyHeld = false;
   sendPtt(false);
   return micMode;
@@ -800,6 +802,26 @@ ipcMain.handle('overlay:set-config', (_event, patch) => applyOverlayConfig(patch
 ipcMain.on('overlay:set-state', (_event, value) => {
   overlayState = sanitizeOverlayState(value);
   applyOverlay();
+});
+
+ipcMain.handle('screen:get-sources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 320, height: 180 },
+    fetchWindowIcons: true,
+  });
+  return sources.map((source) => ({
+    id: source.id,
+    name: source.name,
+    kind: source.id.startsWith('screen:') ? 'screen' : 'window',
+    thumbnail: source.thumbnail && !source.thumbnail.isEmpty() ? source.thumbnail.toDataURL() : '',
+    appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : '',
+  }));
+});
+
+ipcMain.handle('screen:select-source', (_event, sourceId) => {
+  pendingDisplaySourceId = typeof sourceId === 'string' ? sourceId.slice(0, 200) : null;
+  return Boolean(pendingDisplaySourceId);
 });
 
 ipcMain.handle('app:change-server', () => {
@@ -990,30 +1012,24 @@ function configureSession() {
     ].includes(permission);
   });
 
-  ses.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      desktopCapturer
-        .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
-        .then((sources) => {
-          if (sources.length === 0) {
-            callback({});
-            return;
-          }
-          const primaryDisplay = screen.getPrimaryDisplay();
-          const sourceId = `screen:${primaryDisplay.id}:`;
-          const source =
-            sources.find((item) => item.id.startsWith(sourceId)) ??
-            sources.find((item) => item.id.startsWith('screen:')) ??
-            sources[0];
-          callback({ video: source });
-        })
-        .catch((error) => {
-          console.error('[desktop] display media failed', error);
-          callback({});
-        });
-    },
-    { useSystemPicker: true },
-  );
+  ses.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer
+      .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
+      .then((sources) => {
+        const pending = pendingDisplaySourceId;
+        pendingDisplaySourceId = null;
+        const source =
+          (pending && sources.find((item) => item.id === pending)) ||
+          sources.find((item) => item.id.startsWith(`screen:${screen.getPrimaryDisplay().id}:`)) ||
+          sources.find((item) => item.id.startsWith('screen:')) ||
+          sources[0];
+        callback(source ? { video: source } : {});
+      })
+      .catch((error) => {
+        console.error('[desktop] display media failed', error);
+        callback({});
+      });
+  });
 }
 
 const singleInstance = app.requestSingleInstanceLock();

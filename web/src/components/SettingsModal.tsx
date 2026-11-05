@@ -388,7 +388,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             head.connect(gain);
           }
           gain.connect(destination);
-          applyMicGate(gate, settings.micSensitivity, settings.mode !== 'ptt');
+          applyMicGate(gate, settings.micSensitivity, settings.mode === 'voice');
 
           audioCtxRef.current = ctx;
           testGateRef.current = gate;
@@ -470,7 +470,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (testGainRef.current) testGainRef.current.gain.value = settings.inputGain;
-    applyMicGate(testGateRef.current, settings.micSensitivity, settings.mode !== 'ptt');
+    applyMicGate(testGateRef.current, settings.micSensitivity, settings.mode === 'voice');
   }, [settings.inputGain, settings.micSensitivity, settings.mode]);
 
   useEffect(() => {
@@ -609,7 +609,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       ? 'Кнопку нужно удерживать — передача идёт, пока она нажата.'
       : settings.mode === 'toggle'
         ? 'Нажатие включает микрофон, повторное нажатие выключает.'
-        : 'Кнопка не используется: микрофон передаёт постоянно.';
+        : 'Кнопка не используется: микрофон передаёт, когда вы говорите.';
   const globalHint = desktop
     ? 'В приложении для Windows клавиша или кнопка мыши срабатывают глобально — даже когда окно свёрнуто или запущена игра. Зажатые в игре Shift или Ctrl не мешают.'
     : 'В браузере клавиша работает, когда вкладка активна. Глобально клавиша и кнопки мыши работают в приложении для Windows.';
@@ -618,7 +618,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const threshold = sensitivityThreshold(settings.micSensitivity);
   const thresholdPercent = Math.min(99, Math.max(1, micLevelPercent(threshold)));
   const levelPercent = micLevelPercent(level);
-  const gateOpen = settings.mode === 'ptt' ? true : level >= threshold;
+  const gateOpen = settings.mode === 'voice' ? level >= threshold : true;
+  const gateApplies = settings.mode === 'voice';
 
   type KeyTarget = {
     id: string;
@@ -899,13 +900,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     onChange={(event) => {
                       const value = event.target.value;
                       updateSettings({
-                        mode: value === 'ptt' ? 'ptt' : value === 'toggle' ? 'toggle' : 'open',
+                        mode: value === 'ptt' ? 'ptt' : value === 'toggle' ? 'toggle' : 'voice',
                       });
                     }}
                   >
-                    <option value="open">Открытый микрофон</option>
+                    <option value="voice">Активация голосом</option>
+                    <option value="toggle">Активация по кнопке (вкл/выкл)</option>
                     <option value="ptt">Push-to-talk (удерживать)</option>
-                    <option value="toggle">По кнопке (вкл/выкл)</option>
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                 </div>
@@ -980,11 +981,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     style={{ width: `${levelPercent}%` }}
                   />
                 </div>
-                <span
-                  className="absolute -top-0.5 h-3 w-0.5 -translate-x-1/2 rounded-full bg-warn"
-                  style={{ left: `${thresholdPercent}%` }}
-                  title="Порог чувствительности"
-                />
+                {gateApplies && (
+                  <span
+                    className="absolute -top-0.5 h-3 w-0.5 -translate-x-1/2 rounded-full bg-warn"
+                    style={{ left: `${thresholdPercent}%` }}
+                    title="Порог чувствительности"
+                  />
+                )}
               </div>
               {testError ? (
                 <p className="mt-2 text-[11px] text-danger">{testError}</p>
@@ -1002,10 +1005,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       : settings.mode === 'toggle'
                         ? 'По кнопке: клавиша включает и выключает микрофон'
                         : gateOpen
-                          ? 'Сигнал проходит'
+                          ? 'Голос проходит'
                           : 'Тише порога — микрофон не передаёт'}
                   </span>
-                  <span className="text-muted">· оранжевая риска — порог</span>
+                  {gateApplies && <span className="text-muted">· оранжевая риска — порог</span>}
                 </p>
               )}
               <div className="mt-3">
@@ -1033,9 +1036,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   className="mt-2 w-full"
                 />
                 <p className="mt-1 text-[10px] leading-relaxed text-muted">
-                  Правее — микрофон реагирует на более тихий голос. В открытом режиме звук ниже
-                  порога не передаётся; в push-to-talk порог не применяется. «Слышать себя» тоже
-                  проходит через этот порог.
+                  Правее — микрофон реагирует на более тихий голос. Порог работает в режиме
+                  активации голосом: звук ниже порога не передаётся. В режимах по кнопке и
+                  push-to-talk порог не применяется.
                 </p>
               </div>
 
@@ -1089,7 +1092,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               />
             </div>
             <p className="text-[11px] leading-relaxed text-muted">{keyHint}</p>
-            {desktop && settings.mode !== 'open' && (
+            {desktop && settings.mode !== 'voice' && (
               <p className="text-[11px] leading-relaxed text-muted">
                 Если игра запущена от имени администратора, запустите LA2Speak тоже от
                 администратора: Windows не передаёт нажатия между окнами с разными правами.
@@ -1100,13 +1103,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 Состояние микрофона видно на иконке в системном трее: серая — не в канале,
                 зелёная — передаёт, красная с чертой — выключен. Щелчок по иконке открывает
                 приложение, в меню иконки можно переключить микрофон.
-              </p>
-            )}
-            {settings.mode === 'open' && (
-              <p className="rounded-lg border border-warn/20 bg-warn/5 px-3 py-2 text-[11px] text-warn">
-                Сейчас включён открытый микрофон: он передаёт всё время, в том числе при
-                вещании во все каналы. Выберите режим «Push-to-talk» выше, чтобы вас слышали
-                только пока удерживается кнопка.
               </p>
             )}
           </div>
