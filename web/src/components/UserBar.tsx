@@ -1,9 +1,9 @@
 import {
   HeadphoneOff,
   Headphones,
-  LogOut,
   Mic,
   MicOff,
+  PhoneOff,
   Power,
   Settings,
   Shield,
@@ -14,7 +14,7 @@ import { LabelBadge } from './LabelBadge';
 import { isSelfMicMuted, useApp } from '../lib/store';
 import { cn } from '../lib/utils';
 import { primaryRole, roleLabel, useIsStaff } from '../lib/roles';
-import { logout, toggleDeafen, toggleMute, toggleMic } from '../lib/actions';
+import { leaveVoice, logout, toggleDeafen, toggleMute, toggleMic } from '../lib/actions';
 
 function TipButton({
   label,
@@ -139,6 +139,12 @@ export function UserBar({
             <Headphones className="h-4 w-4" />
           )}
         </TipButton>
+
+        {inVoice && (
+          <TipButton label="Отключиться от голосового канала" danger onClick={leaveVoice}>
+            <PhoneOff className="h-4 w-4" />
+          </TipButton>
+        )}
 
         {isStaff && (
           <TipButton label="Управление сервером" onClick={onOpenAdmin}>

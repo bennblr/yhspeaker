@@ -52,10 +52,16 @@ let micState = {
 let overlayWindow = null;
 let overlayReady = false;
 let overlayState = null;
+// Ручное положение: пока режим включён, окно ловит мышь и его можно перетащить.
+let overlayEditing = false;
+let overlayMoveGuardUntil = 0;
+let overlaySaveTimer = null;
+let overlayEditTimer = null;
 // Источник, выбранный в окне «Показать экран»; следующий getDisplayMedia заберёт его.
 let pendingDisplaySourceId = null;
 const OVERLAY_WIDTH = 200;
 const OVERLAY_ROW = 24;
+const OVERLAY_EDIT_BAR = 30;
 const OVERLAY_ANCHORS = [
   'top-left',
   'top-center',
@@ -69,7 +75,16 @@ const OVERLAY_ANCHORS = [
 ];
 
 function normalizeOverlayAnchor(value) {
+  if (value === 'manual') return 'manual';
   return OVERLAY_ANCHORS.includes(value) ? value : 'top-left';
+}
+
+function sanitizeOverlayPosition(value) {
+  if (!value || typeof value !== 'object') return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.round(x), y: Math.round(y) };
 }
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
@@ -100,6 +115,7 @@ function loadConfig() {
       pttKey: typeof parsed.pttKey === 'string' ? parsed.pttKey : 'V',
       overlayEnabled: parsed.overlayEnabled !== false,
       overlayAnchor: normalizeOverlayAnchor(parsed.overlayAnchor),
+      overlayPosition: sanitizeOverlayPosition(parsed.overlayPosition),
       servers: sanitizeServers(parsed.servers),
     };
   } catch {
@@ -108,6 +124,7 @@ function loadConfig() {
       pttKey: 'V',
       overlayEnabled: true,
       overlayAnchor: 'top-left',
+      overlayPosition: null,
       servers: [],
     };
   }
@@ -296,9 +313,27 @@ function overlayBounds(count) {
   const area = screen.getPrimaryDisplay().workArea;
   const rows = Math.min(Math.max(count, 1), 30);
   const width = OVERLAY_WIDTH;
-  const height = Math.min(14 + rows * OVERLAY_ROW, Math.round(area.height * 0.7));
+  const heightLimit = Math.round(area.height * 0.7);
+  const height = Math.min(
+    14 + rows * OVERLAY_ROW + (overlayEditing ? OVERLAY_EDIT_BAR : 0),
+    heightLimit,
+  );
   const margin = 12;
-  const [vertical, horizontal] = normalizeOverlayAnchor(stored.overlayAnchor).split('-');
+  const anchor = normalizeOverlayAnchor(stored.overlayAnchor);
+  if (anchor === 'manual' && stored.overlayPosition) {
+    const { x, y } = stored.overlayPosition;
+    const target = screen.getDisplayNearestPoint({
+      x: x + Math.round(width / 2),
+      y: y + Math.round(height / 2),
+    }).workArea;
+    return {
+      x: Math.min(Math.max(x, target.x), target.x + target.width - width),
+      y: Math.min(Math.max(y, target.y), target.y + target.height - height),
+      width,
+      height,
+    };
+  }
+  const [vertical, horizontal] = anchor.split('-');
   const x =
     horizontal === 'left'
       ? area.x + margin
@@ -319,6 +354,64 @@ function overlayBounds(count) {
   };
 }
 
+function sendOverlayEdit() {
+  if (overlayWindow && !overlayWindow.isDestroyed() && overlayReady) {
+    overlayWindow.webContents.send('overlay:edit', overlayEditing);
+  }
+}
+
+function rememberOverlayPosition() {
+  if (!overlayEditing || !overlayWindow || overlayWindow.isDestroyed()) return;
+  if (Date.now() < overlayMoveGuardUntil) return;
+  const [x, y] = overlayWindow.getPosition();
+  stored.overlayAnchor = 'manual';
+  stored.overlayPosition = { x, y };
+  if (overlaySaveTimer) return;
+  overlaySaveTimer = setTimeout(() => {
+    overlaySaveTimer = null;
+    saveConfig(stored);
+    sendOverlayConfig();
+  }, 300);
+}
+
+function setOverlayEditing(value) {
+  const next = Boolean(value);
+  if (overlayEditing === next) return;
+  overlayEditing = next;
+  if (overlayEditTimer) {
+    clearTimeout(overlayEditTimer);
+    overlayEditTimer = null;
+  }
+  if (next) {
+    ensureOverlayWindow();
+    // Режим настройки не должен остаться включённым навсегда: оверлей иначе
+    // продолжал бы перехватывать мышь поверх чужих окон.
+    overlayEditTimer = setTimeout(() => finishOverlayEditing(), 120_000);
+  }
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setFocusable(next);
+    overlayWindow.setMovable(next);
+    overlayWindow.setIgnoreMouseEvents(!next);
+  }
+  // Режим настройки показывается даже вне голосового канала и добавляет
+  // полосу «Готово»: без пересчёта окно осталось бы скрытым и старой высоты.
+  applyOverlay();
+  if (next && overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.focus();
+  sendOverlayEdit();
+}
+
+function finishOverlayEditing() {
+  if (!overlayEditing) return;
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    const [x, y] = overlayWindow.getPosition();
+    if (stored.overlayAnchor === 'manual') stored.overlayPosition = { x, y };
+  }
+  setOverlayEditing(false);
+  saveConfig(stored);
+  applyOverlay();
+  sendOverlayConfig();
+}
+
 function ensureOverlayWindow() {
   if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow;
   overlayReady = false;
@@ -329,13 +422,13 @@ function ensureOverlayWindow() {
     backgroundColor: '#00000000',
     hasShadow: false,
     resizable: false,
-    movable: false,
+    movable: overlayEditing,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
     show: false,
-    focusable: false,
+    focusable: overlayEditing,
     alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'overlay-preload.js'),
@@ -348,7 +441,8 @@ function ensureOverlayWindow() {
   // Уровень screen-saver держит окно над панелью задач и безрамочным
   // полноэкранным режимом игр; клики проходят сквозь оверлей.
   overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-  overlayWindow.setIgnoreMouseEvents(true);
+  overlayWindow.setIgnoreMouseEvents(!overlayEditing);
+  overlayWindow.on('move', rememberOverlayPosition);
   overlayWindow.on('closed', () => {
     overlayWindow = null;
     overlayReady = false;
@@ -356,13 +450,14 @@ function ensureOverlayWindow() {
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true;
     if (overlayState) overlayWindow?.webContents.send('overlay:state', overlayState);
+    sendOverlayEdit();
   });
   void overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
   return overlayWindow;
 }
 
 function applyOverlay() {
-  const visible = Boolean(stored.overlayEnabled && overlayState);
+  const visible = overlayEditing || Boolean(stored.overlayEnabled && overlayState);
   if (!visible) {
     if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
       overlayWindow.hide();
@@ -370,7 +465,8 @@ function applyOverlay() {
     return;
   }
   const win = ensureOverlayWindow();
-  win.setBounds(overlayBounds(overlayState.participants.length));
+  overlayMoveGuardUntil = Date.now() + 250;
+  win.setBounds(overlayBounds(overlayState ? overlayState.participants.length : 1));
   if (overlayReady) win.webContents.send('overlay:state', overlayState);
   if (!win.isVisible()) win.showInactive();
 }
@@ -378,6 +474,15 @@ function applyOverlay() {
 function destroyOverlay() {
   overlayState = null;
   overlayReady = false;
+  overlayEditing = false;
+  if (overlayEditTimer) {
+    clearTimeout(overlayEditTimer);
+    overlayEditTimer = null;
+  }
+  if (overlaySaveTimer) {
+    clearTimeout(overlaySaveTimer);
+    overlaySaveTimer = null;
+  }
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
   overlayWindow = null;
 }
@@ -386,6 +491,8 @@ function overlayConfig() {
   return {
     enabled: Boolean(stored.overlayEnabled),
     anchor: normalizeOverlayAnchor(stored.overlayAnchor),
+    position: stored.overlayPosition ?? null,
+    editing: overlayEditing,
   };
 }
 
@@ -404,9 +511,10 @@ function sendOverlayConfig() {
 function applyOverlayConfig(patch) {
   if (patch && typeof patch === 'object') {
     if (typeof patch.enabled === 'boolean') stored.overlayEnabled = patch.enabled;
-    if (typeof patch.anchor === 'string' && OVERLAY_ANCHORS.includes(patch.anchor)) {
+    if (typeof patch.anchor === 'string' && normalizeOverlayAnchor(patch.anchor) === patch.anchor) {
       stored.overlayAnchor = patch.anchor;
     }
+    if (typeof patch.editing === 'boolean') setOverlayEditing(patch.editing);
     saveConfig(stored);
   }
   syncOverlayMenu();
@@ -555,6 +663,14 @@ function createTray() {
 
 const MOUSE_TOKENS = { Mouse3: 3, Mouse4: 4, Mouse5: 5 };
 
+// Модификатор может быть назначен сам по себе: ловим обе его физические клавиши.
+const MODIFIER_KEY_TOKENS = {
+  Control: ['Ctrl', 'CtrlRight'],
+  Alt: ['Alt', 'AltRight'],
+  Shift: ['Shift', 'ShiftRight'],
+  Meta: ['Meta', 'MetaRight'],
+};
+
 function parseAccelerator(accelerator) {
   if (!accelerator) return null;
   const parts = String(accelerator).split('+');
@@ -570,6 +686,13 @@ function parseAccelerator(accelerator) {
     return { mouse: MOUSE_TOKENS[key], ...modifiers };
   }
   if (!uiohookKeys) return null;
+  if (Object.prototype.hasOwnProperty.call(MODIFIER_KEY_TOKENS, key)) {
+    const keycodes = MODIFIER_KEY_TOKENS[key]
+      .map((name) => uiohookKeys[name])
+      .filter((code) => typeof code === 'number');
+    if (keycodes.length === 0) return null;
+    return { keycodes, ...modifiers };
+  }
   const keycode = uiohookKeys[key];
   if (typeof keycode !== 'number') return null;
   return { keycode, ...modifiers };
@@ -603,12 +726,17 @@ function updateModifier(event, down) {
   else heldModifierKeycodes.delete(event.keycode);
 }
 
+function keycodeMatches(match, keycode) {
+  if (Array.isArray(match.keycodes)) return match.keycodes.includes(keycode);
+  return match.keycode === keycode;
+}
+
 // libuiohook не всегда выставляет модификаторы в событии (особенно при
 // синтетическом вводе), поэтому дополнительно отслеживаем нажатые клавиши.
 // Лишние зажатые модификаторы не мешают: в игре можно держать Shift или Ctrl.
 function eventMatches(event, match) {
-  if (!match || match.keycode === undefined) return false;
-  if (event.keycode !== match.keycode) return false;
+  if (!match || (match.keycode === undefined && !Array.isArray(match.keycodes))) return false;
+  if (!keycodeMatches(match, event.keycode)) return false;
   if (match.alt && !(event.altKey || modifierHeld('alt'))) return false;
   if (match.ctrl && !(event.ctrlKey || modifierHeld('ctrl'))) return false;
   if (match.shift && !(event.shiftKey || modifierHeld('shift'))) return false;
@@ -673,14 +801,14 @@ function startKeyboardHook() {
     hook.on('keyup', (event) => {
       for (const binding of broadcastBindings) {
         if (binding.mouse !== undefined) continue;
-        if (event.keycode !== binding.keycode) continue;
+        if (!keycodeMatches(binding, event.keycode)) continue;
         if (!broadcastHeld.delete(binding.target)) continue;
         if (binding.mode === 'ptt') sendBroadcast(binding, false);
       }
       updateModifier(event, false);
 
-      if (!currentAccelerator || currentAccelerator.keycode === undefined) return;
-      if (event.keycode !== currentAccelerator.keycode) return;
+      if (!currentAccelerator || currentAccelerator.mouse !== undefined) return;
+      if (!keycodeMatches(currentAccelerator, event.keycode)) return;
       micKeyHeld = false;
       if (micMode === 'ptt') sendPtt(false);
     });
@@ -798,6 +926,16 @@ ipcMain.handle('window:close', (event) => {
 ipcMain.handle('overlay:get-config', () => overlayConfig());
 
 ipcMain.handle('overlay:set-config', (_event, patch) => applyOverlayConfig(patch));
+
+ipcMain.handle('overlay:set-edit', (_event, editing) => {
+  setOverlayEditing(Boolean(editing));
+  applyOverlay();
+  sendOverlayConfig();
+  return overlayConfig();
+});
+
+// Кнопка «Готово» на самом оверлее: закрывает режим перетаскивания.
+ipcMain.on('overlay:end-edit', () => finishOverlayEditing());
 
 ipcMain.on('overlay:set-state', (_event, value) => {
   overlayState = sanitizeOverlayState(value);

@@ -68,11 +68,21 @@ export type DesktopOverlayAnchor =
   | 'middle-right'
   | 'bottom-left'
   | 'bottom-center'
-  | 'bottom-right';
+  | 'bottom-right'
+  | 'manual';
+
+export interface DesktopOverlayPosition {
+  x: number;
+  y: number;
+}
 
 export interface DesktopOverlayConfig {
   enabled: boolean;
   anchor: DesktopOverlayAnchor;
+  // Появилось вместе с ручным положением: сохранённые координаты и режим
+  // перетаскивания. В старых клиентах этих полей нет.
+  position?: DesktopOverlayPosition | null;
+  editing?: boolean;
 }
 
 export interface DesktopScreenSource {
@@ -94,6 +104,8 @@ export interface DesktopBridge {
   // Появилось в клиенте 1.0.8: настройки оверлея из окна настроек.
   getOverlayConfig?: () => Promise<DesktopOverlayConfig>;
   setOverlayConfig?: (patch: Partial<DesktopOverlayConfig>) => Promise<DesktopOverlayConfig>;
+  // Появилось в клиенте 1.0.11: ручное перетаскивание оверлея.
+  setOverlayEditMode?: (editing: boolean) => Promise<DesktopOverlayConfig>;
   onOverlayConfig?: (callback: (config: DesktopOverlayConfig) => void) => () => void;
   // Появилось в клиенте 1.0.10: выбор экрана или окна для демонстрации.
   getScreenSources?: () => Promise<DesktopScreenSource[]>;

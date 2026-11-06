@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('la2speak', {
   selectScreenSource: (sourceId) => ipcRenderer.invoke('screen:select-source', sourceId),
   getOverlayConfig: () => ipcRenderer.invoke('overlay:get-config'),
   setOverlayConfig: (patch) => ipcRenderer.invoke('overlay:set-config', patch),
+  setOverlayEditMode: (editing) => ipcRenderer.invoke('overlay:set-edit', editing),
   onOverlayConfig: (callback) => {
     const listener = (_event, config) => callback(config);
     ipcRenderer.on('overlay:config', listener);

@@ -22,6 +22,8 @@ import {
   type Channel,
   type DeviceInfo,
   type DeviceKind,
+  type DirectMessage,
+  type DmParticipant,
   type PermissionKey,
   type RolePermissions,
 } from '@tsds/shared';
@@ -191,6 +193,15 @@ const messageSchema = z.object({
     .max(MAX_MESSAGE_LENGTH, `Сообщение длиннее ${MAX_MESSAGE_LENGTH} символов`),
 });
 
+const directMessageSchema = z.object({
+  toUserId: z.string().min(1),
+  text: z
+    .string()
+    .trim()
+    .min(1, 'Сообщение пустое')
+    .max(MAX_MESSAGE_LENGTH, `Сообщение длиннее ${MAX_MESSAGE_LENGTH} символов`),
+});
+
 const channelNameSchema = z
   .string()
   .trim()
@@ -314,6 +325,28 @@ async function enforceChannelAccess(): Promise<void> {
       text: `Канал «${channel.name}» больше не доступен вам`,
     });
   }
+}
+
+// Собеседник личного чата: сначала берём живое подключение, чтобы ник и метка
+// были актуальными, а для офлайн-аккаунта — сохранённый профиль.
+function dmParticipant(userId: string): DmParticipant | null {
+  const online = sessions.sessionsOf(userId)[0];
+  if (online) {
+    return {
+      id: online.id,
+      displayName: online.displayName,
+      label: online.label,
+      role: online.role,
+    };
+  }
+  const stored = store.userById(userId);
+  if (!stored) return null;
+  return {
+    id: stored.id,
+    displayName: stored.displayName,
+    label: stored.label,
+    role: stored.role,
+  };
 }
 
 function channelSockets(channel: Channel) {
@@ -937,6 +970,60 @@ io.on('connection', async (socket: AppSocket) => {
       ack?.({ ok: false, error: message });
     }
   });
+
+  // Личные сообщения получают только отправитель и адресат (на всех их
+  // устройствах). История хранится в store.json и переживает перезапуск.
+  socket.on('dm:send', (payload, ack) => {
+    try {
+      const me = sessions.get(sessionId);
+      if (!me) throw new HttpError(401, 'Сессия не найдена');
+      const body = parseBody(directMessageSchema, payload);
+      if (body.toUserId === userId) throw new HttpError(400, 'Нельзя написать самому себе');
+      const to = dmParticipant(body.toUserId);
+      const from = dmParticipant(userId);
+      if (!to || !from) throw new HttpError(404, 'Получатель не найден');
+
+      const now = Date.now();
+      while (chatTimestamps.length && now - chatTimestamps[0] > 5000) chatTimestamps.shift();
+      if (chatTimestamps.length >= 8) throw new HttpError(429, 'Слишком часто. Подождите немного');
+      chatTimestamps.push(now);
+
+      const message: DirectMessage = {
+        id: crypto.randomUUID(),
+        from,
+        to,
+        text: body.text,
+        ts: now,
+      };
+      store.addDirectMessage(message);
+      for (const target of new Set([...sessions.socketsOf(userId), ...sessions.socketsOf(to.id)])) {
+        target.emit('dm:message', message);
+      }
+      ack?.({ ok: true });
+    } catch (error) {
+      const message = error instanceof HttpError ? error.message : 'Не удалось отправить сообщение';
+      ack?.({ ok: false, error: message });
+    }
+  });
+
+  socket.on('dm:list', (ack) => {
+    try {
+      ack?.({ ok: true, conversations: store.dmConversations(userId) });
+    } catch {
+      ack?.({ ok: false, error: 'Не удалось загрузить личные сообщения' });
+    }
+  });
+
+  socket.on(
+    'dm:history',
+    safe(async ({ userId: peerId }, ack) => {
+      if (typeof peerId !== 'string' || !peerId) {
+        ack?.({ ok: false, error: 'Собеседник не выбран' });
+        return;
+      }
+      ack?.({ ok: true, messages: store.directMessages(userId, peerId) });
+    }),
+  );
 
   socket.on(
     'admin:deleteMessage',

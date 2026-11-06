@@ -245,6 +245,57 @@ export function toggleScreenShare(): void {
   void voice.startScreenShare();
 }
 
+export function refreshDmConversations(): void {
+  const socket = getSocket();
+  if (!socket?.connected) return;
+  socket.emit('dm:list', (result) => {
+    if (result.ok && result.conversations) {
+      useApp.getState().setDmConversations(result.conversations);
+    }
+  });
+}
+
+export function loadDmHistory(peerId: string): void {
+  const socket = getSocket();
+  if (!socket?.connected) return;
+  socket.emit('dm:history', { userId: peerId }, (result) => {
+    if (!result.ok) {
+      toast('error', result.error ?? 'Не удалось загрузить личную переписку');
+      return;
+    }
+    useApp.getState().setDmMessages(peerId, result.messages ?? []);
+  });
+}
+
+export function openDirectChat(
+  peer: Pick<OnlineUser, 'id' | 'displayName' | 'label' | 'role'>,
+): void {
+  useApp.getState().setDmPeer({
+    id: peer.id,
+    displayName: peer.displayName,
+    label: peer.label,
+    role: peer.role,
+  });
+  loadDmHistory(peer.id);
+}
+
+export function closeDirectChat(): void {
+  useApp.getState().setDmPeer(null);
+}
+
+export function sendDirectMessage(peerId: string, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const socket = getSocket();
+  if (!socket?.connected) {
+    toast('error', 'Нет соединения с сервером');
+    return;
+  }
+  socket.emit('dm:send', { toUserId: peerId, text: trimmed }, (result) => {
+    if (!result.ok) toast('error', result.error ?? 'Сообщение не отправлено');
+  });
+}
+
 export function sendChatMessage(channelId: string, text: string): void {
   const trimmed = text.trim();
   if (!trimmed) return;

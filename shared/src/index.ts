@@ -163,6 +163,26 @@ export interface ChatMessage {
   ts: number;
 }
 
+export interface DmParticipant {
+  id: string;
+  displayName: string;
+  label?: string;
+  role: BaseRole;
+}
+
+export interface DirectMessage {
+  id: string;
+  from: DmParticipant;
+  to: DmParticipant;
+  text: string;
+  ts: number;
+}
+
+export interface DmConversation {
+  peer: DmParticipant;
+  last: DirectMessage;
+}
+
 export interface PublicServerConfig {
   serverName: string;
   allowGuests: boolean;
@@ -369,6 +389,14 @@ export function summarizeOnlineStats(
 
 export type AckResult = { ok: boolean; error?: string };
 
+export interface DmListResult extends AckResult {
+  conversations?: DmConversation[];
+}
+
+export interface DmHistoryResult extends AckResult {
+  messages?: DirectMessage[];
+}
+
 export interface AuthorizeGuestResult extends AckResult {
   username?: string;
   password?: string;
@@ -384,6 +412,7 @@ export interface ServerToClientEvents {
   'config:update': (config: PublicServerConfig) => void;
   'chat:message': (message: ChatMessage) => void;
   'chat:deleted': (payload: { channelId: string; messageId: string }) => void;
+  'dm:message': (message: DirectMessage) => void;
   'voice:transports': (payload: { send: TransportParams; recv: TransportParams }) => void;
   'voice:newConsumer': (consumer: ConsumerParams) => void;
   'voice:consumerClosed': (payload: { consumerId: string }) => void;
@@ -401,6 +430,15 @@ export interface ClientToServerEvents {
   'chat:send': (
     payload: { channelId: string; text: string },
     ack?: (res: AckResult) => void,
+  ) => void;
+  'dm:send': (
+    payload: { toUserId: string; text: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
+  'dm:list': (ack?: (res: DmListResult) => void) => void;
+  'dm:history': (
+    payload: { userId: string },
+    ack?: (res: DmHistoryResult) => void,
   ) => void;
   'channel:unlock': (
     payload: { channelId: string; password: string },

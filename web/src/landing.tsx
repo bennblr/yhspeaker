@@ -10,3 +10,11 @@ if (!container) throw new Error('Landing root element not found');
 const path = window.location.pathname.replace(/\/+$/, '');
 
 createRoot(container).render(path === '/guides' ? <GuidesPage /> : <LandingPage />);
+
+// Лендинг живёт на корневом домене, поэтому установка PWA начинается здесь,
+// а приложение открывается по /app (см. start_url в манифесте).
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  });
+}

@@ -148,6 +148,10 @@ function isMouseToken(token: string): boolean {
 export function isValidAccelerator(accelerator: string): boolean {
   if (!accelerator) return false;
   const parts = accelerator.split('+');
+  // Одни модификаторы тоже назначение: Ctrl, Shift, Ctrl+Shift и т. п.
+  if (parts.every((part) => (MODIFIERS as readonly string[]).includes(part))) {
+    return new Set(parts).size === parts.length;
+  }
   const key = parts.pop() ?? '';
   if (!isKeyToken(key) && !isMouseToken(key)) return false;
   const seen = new Set<string>();
@@ -177,6 +181,10 @@ function modifiersMatch(
 }
 
 function tokenMatchesCode(token: string, code: string): boolean {
+  if (token === 'Control') return code === 'ControlLeft' || code === 'ControlRight';
+  if (token === 'Alt') return code === 'AltLeft' || code === 'AltRight';
+  if (token === 'Shift') return code === 'ShiftLeft' || code === 'ShiftRight';
+  if (token === 'Meta') return code === 'MetaLeft' || code === 'MetaRight';
   if (/^[A-Z]$/.test(token)) return code === `Key${token}`;
   if (/^[0-9]$/.test(token)) return code === `Digit${token}`;
   return code === token;
@@ -191,6 +199,20 @@ function keyTokenFromEvent(event: KeyboardEvent): string | null {
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.code)) return event.code;
   if (NAMED_KEYS.has(event.code)) return event.code;
   return null;
+}
+
+// Одиночный модификатор — тоже клавиша микрофона: его нельзя получить через
+// acceleratorFromEvent, потому что там модификаторы считаются частью сочетания.
+export function modifierTokenFromEvent(event: KeyboardEvent): string | null {
+  if (event.key === 'Control') return 'Control';
+  if (event.key === 'Alt') return 'Alt';
+  if (event.key === 'Shift') return 'Shift';
+  if (event.key === 'Meta') return 'Meta';
+  return null;
+}
+
+export function modifierCombination(tokens: string[]): string {
+  return MODIFIERS.filter((modifier) => tokens.includes(modifier)).join('+');
 }
 
 export function acceleratorFromEvent(event: KeyboardEvent): string | null {

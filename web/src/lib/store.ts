@@ -4,6 +4,9 @@ import type {
   Channel,
   ChatMessage,
   ClientConfig,
+  DirectMessage,
+  DmConversation,
+  DmParticipant,
   InitState,
   OnlineUser,
   Role,
@@ -51,6 +54,11 @@ export interface AppState {
   channelLock: ChannelLock | null;
   messages: Record<string, ChatMessage[]>;
   unread: Record<string, number>;
+  // Личные чаты: сообщения по идентификатору собеседника и список переписок.
+  dmMessages: Record<string, DirectMessage[]>;
+  dmConversations: DmConversation[];
+  dmPeer: DmParticipant | null;
+  dmUnread: Record<string, number>;
   speaking: string[];
   localMuted: string[];
   // Индивидуальная громкость собеседников: множитель 0–2 к общему уровню.
@@ -74,6 +82,10 @@ export interface AppState {
   setMessages: (channelId: string, messages: ChatMessage[]) => void;
   addMessage: (message: ChatMessage) => void;
   removeMessage: (channelId: string, messageId: string) => void;
+  setDmConversations: (conversations: DmConversation[]) => void;
+  setDmMessages: (peerId: string, messages: DirectMessage[]) => void;
+  setDmPeer: (peer: DmParticipant | null) => void;
+  addDmMessage: (message: DirectMessage) => void;
   setSpeaking: (userIds: string[]) => void;
   toggleLocalMute: (userId: string) => void;
   setUserVolume: (userId: string, volume: number) => void;
@@ -148,6 +160,10 @@ export const useApp = create<AppState>((set, get) => ({
   channelLock: null,
   messages: {},
   unread: {},
+  dmMessages: {},
+  dmConversations: [],
+  dmPeer: null,
+  dmUnread: {},
   speaking: [],
   localMuted: loadLocalMuted(),
   userVolumes: loadUserVolumes(),
@@ -231,6 +247,7 @@ export const useApp = create<AppState>((set, get) => ({
     set((state) => ({
       activeChannelId: channelId,
       unread: { ...state.unread, [channelId]: 0 },
+      dmPeer: null,
     }));
   },
 
@@ -275,6 +292,43 @@ export const useApp = create<AppState>((set, get) => ({
         ...state.messages,
         [channelId]: list.filter((message) => message.id !== messageId),
       },
+    });
+  },
+
+  setDmConversations: (dmConversations) => set({ dmConversations }),
+
+  setDmMessages: (peerId, messages) => {
+    set((state) => ({
+      dmMessages: { ...state.dmMessages, [peerId]: messages },
+    }));
+  },
+
+  setDmPeer: (dmPeer) => {
+    set((state) => ({
+      dmPeer,
+      dmUnread: dmPeer ? { ...state.dmUnread, [dmPeer.id]: 0 } : state.dmUnread,
+    }));
+  },
+
+  addDmMessage: (message) => {
+    const state = get();
+    const meId = state.me?.id;
+    if (!meId) return;
+    const fromMe = message.from.id === meId;
+    const peer = fromMe ? message.to : message.from;
+    const list = state.dmMessages[peer.id] ?? [];
+    if (list.some((item) => item.id === message.id)) return;
+    const active = state.dmPeer?.id === peer.id;
+    set({
+      dmMessages: { ...state.dmMessages, [peer.id]: [...list, message].slice(-300) },
+      dmConversations: [
+        { peer, last: message },
+        ...state.dmConversations.filter((item) => item.peer.id !== peer.id),
+      ],
+      dmUnread:
+        active || fromMe
+          ? state.dmUnread
+          : { ...state.dmUnread, [peer.id]: (state.dmUnread[peer.id] ?? 0) + 1 },
     });
   },
 
@@ -367,6 +421,10 @@ export const useApp = create<AppState>((set, get) => ({
       channelLock: null,
       messages: {},
       unread: {},
+      dmMessages: {},
+      dmConversations: [],
+      dmPeer: null,
+      dmUnread: {},
       speaking: [],
       voice: {
         channelId: null,

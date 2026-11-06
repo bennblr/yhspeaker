@@ -18,9 +18,16 @@ import { Avatar } from './Avatar';
 import { LabelBadge } from './LabelBadge';
 import { UserBar } from './UserBar';
 import { UserMenu } from './UserMenu';
+import { NewDmDialog } from './NewDmDialog';
 import { useApp } from '../lib/store';
 import { cn, serverLabel } from '../lib/utils';
-import { canDragUser, joinVoice, moveUserToChannel, selectChannel } from '../lib/actions';
+import {
+  canDragUser,
+  joinVoice,
+  moveUserToChannel,
+  openDirectChat,
+  selectChannel,
+} from '../lib/actions';
 import { primaryRole, roleLabel } from '../lib/roles';
 
 interface DragState {
@@ -348,7 +355,15 @@ function ChannelRow({
   );
 }
 
-function SectionTitle({ children, onAdd }: { children: string; onAdd?: () => void }) {
+function SectionTitle({
+  children,
+  onAdd,
+  addTitle = 'Создать канал',
+}: {
+  children: string;
+  onAdd?: () => void;
+  addTitle?: string;
+}) {
   return (
     <div className="flex items-center justify-between px-2 pb-1 pt-3">
       <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted/80">
@@ -359,7 +374,7 @@ function SectionTitle({ children, onAdd }: { children: string; onAdd?: () => voi
           type="button"
           onClick={onAdd}
           className="rounded p-1 text-muted transition hover:bg-panel3 hover:text-slate-100"
-          title="Создать канал"
+          title={addTitle}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -384,6 +399,9 @@ export function Sidebar({
   const config = useApp((state) => state.config);
   const activeChannelId = useApp((state) => state.activeChannelId);
   const unread = useApp((state) => state.unread);
+  const dmConversations = useApp((state) => state.dmConversations);
+  const dmPeer = useApp((state) => state.dmPeer);
+  const dmUnread = useApp((state) => state.dmUnread);
   const speaking = useApp((state) => state.speaking);
   const voiceChannelId = useApp((state) => state.voice.channelId);
   const connection = useApp((state) => state.connection);
@@ -395,6 +413,7 @@ export function Sidebar({
 
   const [dragUser, setDragUser] = useState<OnlineUser | null>(null);
   const [overChannelId, setOverChannelId] = useState<string | null>(null);
+  const [newDmOpen, setNewDmOpen] = useState(false);
   const dragState = useMemo<DragState>(
     () => ({
       user: dragUser,
@@ -455,6 +474,47 @@ export function Sidebar({
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
         <DragContext.Provider value={dragState}>
+        <SectionTitle onAdd={() => setNewDmOpen(true)} addTitle="Начать личный чат">
+          Личные сообщения
+        </SectionTitle>
+        <div className="space-y-0.5">
+          {dmConversations.map((conversation) => {
+            const count = dmUnread[conversation.peer.id] ?? 0;
+            return (
+              <button
+                key={conversation.peer.id}
+                type="button"
+                onClick={() => {
+                  openDirectChat(conversation.peer);
+                  onNavigate?.();
+                }}
+                className={cn(
+                  'sidebar-item group',
+                  dmPeer?.id === conversation.peer.id && 'sidebar-item-active',
+                )}
+                title={`Личный чат с ${conversation.peer.displayName}`}
+              >
+                <Avatar
+                  id={conversation.peer.id}
+                  name={conversation.peer.displayName}
+                  size="xs"
+                />
+                <span className="min-w-0 flex-1 truncate">{conversation.peer.displayName}</span>
+                {count > 0 && (
+                  <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    {count > 99 ? '99+' : count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {dmConversations.length === 0 && (
+            <p className="px-2 pb-1 text-[11px] leading-relaxed text-muted/80">
+              Нажмите «+», чтобы написать участнику.
+            </p>
+          )}
+        </div>
+
         <SectionTitle onAdd={canManageChannels ? onOpenAdmin : undefined}>Голосовые каналы</SectionTitle>
         <div className="space-y-0.5">
           {voiceChannels.map((channel) => {
@@ -467,7 +527,7 @@ export function Sidebar({
                 speaking={speakingSet}
                 unread={0}
                 connected={voiceChannelId === channel.id}
-                active={activeChannelId === channel.id}
+                active={!dmPeer && activeChannelId === channel.id}
                 onClick={() => handleChannel(channel)}
               />
             );
@@ -484,7 +544,7 @@ export function Sidebar({
               speaking={speakingSet}
               unread={unread[channel.id] ?? 0}
               connected={false}
-              active={activeChannelId === channel.id}
+              active={!dmPeer && activeChannelId === channel.id}
               onClick={() => handleChannel(channel)}
             />
           ))}
@@ -499,6 +559,12 @@ export function Sidebar({
       </div>
 
       <UserBar onOpenSettings={onOpenSettings} onOpenAdmin={onOpenAdmin} />
+
+      <NewDmDialog
+        open={newDmOpen}
+        onClose={() => setNewDmOpen(false)}
+        onPicked={onNavigate}
+      />
     </aside>
   );
 }

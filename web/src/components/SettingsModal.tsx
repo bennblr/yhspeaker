@@ -31,6 +31,8 @@ import {
   formatAccelerator,
   isMouseAccelerator,
   micLevelPercent,
+  modifierCombination,
+  modifierTokenFromEvent,
   sensitivityThreshold,
   type BroadcastKeys,
 } from '../lib/settings';
@@ -131,6 +133,10 @@ function HotkeyRecorder({
   const [recordingHint, setRecordingHint] = useState<string | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const onChangeRef = useRef(onChange);
+  // Модификатор можно назначить и без второй клавиши: Ctrl, Shift, Ctrl+Shift.
+  // Копим нажатые модификаторы и фиксируем сочетание, когда отпустят последний.
+  const pressedModifiersRef = useRef<string[]>([]);
+  const lastModifierComboRef = useRef<string | null>(null);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -151,15 +157,20 @@ function HotkeyRecorder({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      if (
-        event.key === 'Control' ||
-        event.key === 'Alt' ||
-        event.key === 'Shift' ||
-        event.key === 'Meta'
-      ) {
-        setRecordingHint('Теперь нажмите клавишу — получится сочетание.');
+      const modifier = modifierTokenFromEvent(event);
+      if (modifier) {
+        pressedModifiersRef.current = [
+          ...new Set([...pressedModifiersRef.current, modifier]),
+        ];
+        const combo = modifierCombination(pressedModifiersRef.current);
+        lastModifierComboRef.current = combo;
+        setRecordingHint(
+          `Отпустите, чтобы назначить «${formatAccelerator(combo)}», или нажмите ещё клавишу для сочетания.`,
+        );
         return;
       }
+      pressedModifiersRef.current = [];
+      lastModifierComboRef.current = null;
       const accelerator = acceleratorFromEvent(event);
       if (!accelerator) {
         setRecordingHint('Эта клавиша не поддерживается. Попробуйте другую.');
@@ -172,8 +183,21 @@ function HotkeyRecorder({
     const up = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      const modifier = modifierTokenFromEvent(event);
+      if (!modifier) return;
+      const pressed = pressedModifiersRef.current.filter((token) => token !== modifier);
+      pressedModifiersRef.current = pressed;
+      if (pressed.length > 0) return;
+      const combo = lastModifierComboRef.current;
+      lastModifierComboRef.current = null;
+      if (!combo) return;
+      onChangeRef.current(combo);
+      setRecording(false);
+      setRecordingHint(null);
     };
     const cancel = () => {
+      pressedModifiersRef.current = [];
+      lastModifierComboRef.current = null;
       setRecording(false);
       setRecordingHint(null);
     };
@@ -297,6 +321,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   // только переключение, поэтому вариант просто недоступен.
   const broadcastPttSupported = !desktop || Boolean(desktop.onBroadcastState);
   const overlayConfigSupported = Boolean(desktop?.getOverlayConfig);
+  const overlayEditSupported = Boolean(desktop?.setOverlayEditMode);
   const [overlayConfig, setOverlayConfig] = useState<DesktopOverlayConfig | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
@@ -520,6 +545,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open, overlayConfigSupported]);
 
+  // Закрыли настройки во время перетаскивания — оверлей не должен остаться
+  // перехватывающим мышь поверх других окон.
+  useEffect(() => {
+    if (open || !overlayConfig?.editing || !desktop?.setOverlayEditMode) return;
+    void desktop
+      .setOverlayEditMode(false)
+      .then((value) => setOverlayConfig(value))
+      .catch(() => undefined);
+  }, [open, overlayConfig?.editing]);
+
   async function saveOverlayConfig(patch: Partial<DesktopOverlayConfig>): Promise<void> {
     if (!overlayConfig || !desktop?.setOverlayConfig) return;
     setOverlayConfig({ ...overlayConfig, ...patch });
@@ -527,6 +562,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setOverlayConfig(await desktop.setOverlayConfig(patch));
     } catch {
       toast('error', 'Не удалось применить настройки оверлея');
+    }
+  }
+
+  async function toggleOverlayEditing(): Promise<void> {
+    if (!desktop?.setOverlayEditMode) return;
+    try {
+      setOverlayConfig(await desktop.setOverlayEditMode(!overlayConfig?.editing));
+    } catch {
+      toast('error', 'Не удалось включить перемещение оверлея');
     }
   }
 
@@ -1132,7 +1176,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       title={anchor.label}
                       aria-label={anchor.label}
                       aria-pressed={overlayConfig.anchor === anchor.id}
-                      onClick={() => void saveOverlayConfig({ anchor: anchor.id })}
+                      onClick={() =>
+                        void saveOverlayConfig({
+                          anchor: anchor.id,
+                          ...(overlayConfig.editing ? { editing: false } : {}),
+                        })
+                      }
                       className={cn(
                         'flex h-8 rounded-md border p-1.5 transition',
                         anchor.id.startsWith('top')
@@ -1163,6 +1212,32 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   Оверлей виден только в голосовом канале. Переключатель также есть в меню
                   «Вид → Оверлей канала».
                 </p>
+                {overlayEditSupported && (
+                  <div className="mt-3 rounded-lg border border-line bg-panel/60 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className={cn(
+                          'btn-ghost h-8 px-3 text-xs',
+                          overlayConfig.editing && 'border-accent/60 text-accent',
+                        )}
+                        onClick={() => void toggleOverlayEditing()}
+                      >
+                        {overlayConfig.editing ? 'Готово' : 'Перетащить вручную'}
+                      </button>
+                      {overlayConfig.anchor === 'manual' && overlayConfig.position && (
+                        <span className="text-[11px] text-muted">
+                          Положение: {overlayConfig.position.x} × {overlayConfig.position.y}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                      {overlayConfig.editing
+                        ? 'Перетащите оверлей мышью на нужное место. Кнопка «Готово» на оверлее или здесь завершит настройку.'
+                        : 'Свободное положение вместо сетки: включите режим и перетащите оверлей. Позиция сохранится между запусками.'}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </Section>

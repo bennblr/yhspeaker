@@ -27,7 +27,7 @@ export function ScreenSharePicker() {
     if (!open) return;
     const load = desktop?.getScreenSources;
     if (!load) {
-      setError('Выбор источника доступен в приложении LA2Speak версии 1.0.10 и новее.');
+      setError('Выбор источника доступен в приложении LA2Speak версии 1.0.11 и новее.');
       return;
     }
     let cancelled = false;

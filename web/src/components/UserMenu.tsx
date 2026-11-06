@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Ban, LogOut, MicOff, ShieldCheck, Tag, UserCheck } from 'lucide-react';
+import { Ban, LogOut, MessageSquare, MicOff, ShieldCheck, Tag, UserCheck } from 'lucide-react';
 import {
   hasPermission,
   type BaseRole,
@@ -15,7 +15,7 @@ import { showCredentials } from './CredentialsDialog';
 import { useApp } from '../lib/store';
 import { cn } from '../lib/utils';
 import { BASE_ROLE_META } from '../lib/roles';
-import { toast } from '../lib/actions';
+import { toast, openDirectChat } from '../lib/actions';
 import { getSocket } from '../lib/socket';
 
 // Одно меню участника и для громкости, и для действий модератора: раньше это
@@ -185,6 +185,21 @@ export function UserMenu({
             Настройка действует только на этом устройстве и только для вас.
           </p>
         </div>
+
+        {me?.id !== user.id && (
+          <div className="border-t border-line pt-1">
+            <button
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-300 transition hover:bg-panel3"
+              onClick={() => {
+                openDirectChat(user);
+                onClose();
+              }}
+            >
+              <MessageSquare className="h-3.5 w-3.5 text-accent" />
+              Написать сообщение
+            </button>
+          </div>
+        )}
 
         {socket && canModerateUser && (
           <div className="mt-1 border-t border-line pt-1">

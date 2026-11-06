@@ -1,9 +1,29 @@
-const VERSION = 'la2speak-v1';
+const VERSION = 'la2speak-v2';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
+const SHELL_PATHS = ['/app', '/'];
 
-self.addEventListener('install', () => {
-  self.skipWaiting();
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    (async () => {
+      // Приложение открывается с /app, а с корня может отдаваться лендинг.
+      // Кэшируем оба адреса, чтобы установленное приложение стартовало и без сети.
+      const cache = await caches.open(SHELL_CACHE);
+      await Promise.all(
+        SHELL_PATHS.map(async (path) => {
+          try {
+            const response = await fetch(path, { cache: 'no-store' });
+            if (response.ok && /text\/html/i.test(response.headers.get('content-type') ?? '')) {
+              await cache.put(path, response);
+            }
+          } catch {
+            /* офлайн во время установки — кэш заполнится при первой навигации */
+          }
+        }),
+      );
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -27,15 +47,19 @@ function isAsset(pathname) {
 }
 
 async function networkFirstNavigation(request) {
+  const url = new URL(request.url);
   try {
     const response = await fetch(request);
     if (response.ok) {
       const cache = await caches.open(SHELL_CACHE);
-      await cache.put('/', response.clone());
+      await cache.put(url.pathname, response.clone());
     }
     return response;
   } catch {
-    const cached = await caches.match('/');
+    const cached =
+      (await caches.match(url.pathname)) ||
+      (await caches.match('/app')) ||
+      (await caches.match('/'));
     if (cached) return cached;
     throw new Error('offline');
   }

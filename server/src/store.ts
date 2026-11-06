@@ -8,6 +8,8 @@ import type {
   Channel,
   ChannelType,
   ChatMessage,
+  DirectMessage,
+  DmConversation,
   Role,
   RolePermissions,
 } from '@tsds/shared';
@@ -45,9 +47,16 @@ interface StoreData {
   broadcastGroups: BroadcastGroup[];
   roles: Role[];
   messages: Record<string, ChatMessage[]>;
+  // Личные сообщения: ключ — пара идентификаторов аккаунтов в стабильном порядке.
+  directMessages: Record<string, DirectMessage[]>;
 }
 
 const MESSAGES_PER_CHANNEL = 200;
+const MESSAGES_PER_CONVERSATION = 200;
+
+function conversationKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
 
 function emptyData(guestInviteCode: string, guestInviteRequired: boolean): StoreData {
   return {
@@ -59,6 +68,7 @@ function emptyData(guestInviteCode: string, guestInviteRequired: boolean): Store
     broadcastGroups: [],
     roles: [],
     messages: {},
+    directMessages: {},
   };
 }
 
@@ -111,6 +121,7 @@ export class Store {
     this.data.broadcastGroups ??= [];
     this.data.roles ??= [];
     this.data.messages ??= {};
+    this.data.directMessages ??= {};
     if (typeof this.data.guestInviteRequired !== 'boolean') {
       this.data.guestInviteRequired = envInviteRequired;
     }
@@ -298,6 +309,10 @@ export class Store {
     if (this.data.users.length === before) return false;
     for (const group of this.data.broadcastGroups) {
       group.memberIds = group.memberIds.filter((memberId) => memberId !== id);
+    }
+    for (const key of Object.keys(this.data.directMessages ?? {})) {
+      const [a, b] = key.split('|');
+      if (a === id || b === id) delete this.data.directMessages[key];
     }
     this.saveNow();
     return true;
@@ -549,5 +564,36 @@ export class Store {
     list.splice(index, 1);
     this.saveSoon();
     return true;
+  }
+
+  // --- direct messages ---
+
+  directMessages(userId: string, peerId: string, limit = 100): DirectMessage[] {
+    const list = this.data.directMessages[conversationKey(userId, peerId)] ?? [];
+    return list.slice(-Math.max(1, Math.min(limit, MESSAGES_PER_CONVERSATION)));
+  }
+
+  addDirectMessage(message: DirectMessage): void {
+    const key = conversationKey(message.from.id, message.to.id);
+    const list = (this.data.directMessages[key] ??= []);
+    list.push(message);
+    if (list.length > MESSAGES_PER_CONVERSATION) {
+      list.splice(0, list.length - MESSAGES_PER_CONVERSATION);
+    }
+    this.saveSoon();
+  }
+
+  dmConversations(userId: string): DmConversation[] {
+    const result: DmConversation[] = [];
+    for (const list of Object.values(this.data.directMessages)) {
+      const last = list[list.length - 1];
+      if (!last) continue;
+      if (last.from.id !== userId && last.to.id !== userId) continue;
+      result.push({
+        peer: last.from.id === userId ? last.to : last.from,
+        last,
+      });
+    }
+    return result.sort((a, b) => b.last.ts - a.last.ts);
   }
 }

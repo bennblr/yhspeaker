@@ -3,6 +3,7 @@ import { Loader2, Lock, Menu, Radio, RefreshCw, ShieldCheck, WifiOff } from 'luc
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
 import { ChannelView } from './components/ChannelView';
+import { DirectChat } from './components/DirectChat';
 import { SettingsModal } from './components/SettingsModal';
 import { AdminModal } from './components/AdminModal';
 import { ChannelPasswordModal } from './components/ChannelPasswordModal';
@@ -20,7 +21,9 @@ import { voice } from './lib/voice';
 import { preloadNoiseSuppressor } from './lib/micGate';
 import {
   endBroadcastHold,
+  loadDmHistory,
   logout,
+  refreshDmConversations,
   releaseBroadcastHolds,
   startBroadcastHold,
   toast,
@@ -138,6 +141,7 @@ export function App() {
   const connection = useApp((state) => state.connection);
   const channels = useApp((state) => state.channels);
   const activeChannelId = useApp((state) => state.activeChannelId);
+  const dmPeer = useApp((state) => state.dmPeer);
   const unlockedChannels = useApp((state) => state.unlockedChannels);
   const settings = useApp((state) => state.settings);
   const voiceChannelId = useApp((state) => state.voice.channelId);
@@ -230,6 +234,9 @@ export function App() {
     socket.on('state:init', (init) => {
       useApp.getState().applyInit(init);
       void voice.initDevice(init.routerRtpCapabilities);
+      refreshDmConversations();
+      const peer = useApp.getState().dmPeer;
+      if (peer) loadDmHistory(peer.id);
     });
 
     socket.on('state:me', (next) => {
@@ -258,6 +265,10 @@ export function App() {
 
     socket.on('chat:message', (message) => {
       useApp.getState().addMessage(message);
+    });
+
+    socket.on('dm:message', (message) => {
+      useApp.getState().addDmMessage(message);
     });
 
     socket.on('chat:deleted', ({ channelId, messageId }) => {
@@ -816,10 +827,10 @@ export function App() {
           </button>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-slate-100">
-              {activeChannel?.name ?? serverName}
+              {dmPeer?.displayName ?? activeChannel?.name ?? serverName}
             </div>
             <div className="truncate text-[10px] uppercase tracking-wider text-muted">
-              {serverName}
+              {dmPeer ? 'Личные сообщения' : serverName}
             </div>
           </div>
           <span
@@ -836,7 +847,9 @@ export function App() {
 
         {voiceChannelId && <MobileVoiceBar />}
 
-        {activeChannel ? (
+        {dmPeer ? (
+          <DirectChat key={dmPeer.id} peer={dmPeer} />
+        ) : activeChannel ? (
           <ChannelView key={activeChannel.id} channel={activeChannel} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">

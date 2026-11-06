@@ -4,7 +4,7 @@
   "short_name": "LA2Speak",
   "description": "Голосовые и текстовые каналы, роли и вещание — прямо в браузере.",
   "lang": "ru",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
