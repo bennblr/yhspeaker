@@ -12,6 +12,12 @@ import type {
   Role,
 } from '@tsds/shared';
 import { loadSettings, saveSettings, MAX_USER_VOLUME, type MicSettings } from './settings';
+import {
+  defaultSidebarPrefs,
+  loadSidebarPrefs,
+  saveSidebarPrefs,
+  type SidebarSection,
+} from './sidebarPrefs';
 
 export type ToastType = 'ok' | 'error' | 'info';
 
@@ -53,7 +59,12 @@ export interface AppState {
   unlockedChannels: string[];
   channelLock: ChannelLock | null;
   messages: Record<string, ChatMessage[]>;
+  // Всего сохранённых сообщений в канале: приходит с сервера, дальше считаем локально.
+  messageCounts: Record<string, number>;
   unread: Record<string, number>;
+  // Личные настройки вида сайдбара: свёрнутые разделы и порядок каналов.
+  sidebarCollapsed: Record<SidebarSection, boolean>;
+  channelOrder: string[];
   // Личные чаты: сообщения по идентификатору собеседника и список переписок.
   dmMessages: Record<string, DirectMessage[]>;
   dmConversations: DmConversation[];
@@ -82,6 +93,8 @@ export interface AppState {
   setMessages: (channelId: string, messages: ChatMessage[]) => void;
   addMessage: (message: ChatMessage) => void;
   removeMessage: (channelId: string, messageId: string) => void;
+  toggleSidebarSection: (section: SidebarSection) => void;
+  moveChannel: (sourceId: string, targetId: string, after: boolean) => void;
   setDmConversations: (conversations: DmConversation[]) => void;
   setDmMessages: (peerId: string, messages: DirectMessage[]) => void;
   setDmPeer: (peer: DmParticipant | null) => void;
@@ -129,6 +142,16 @@ function loadUserVolumes(): Record<string, number> {
   }
 }
 
+function orderedChannelIds(channels: Channel[], order: string[]): string[] {
+  const known = new Set(channels.map((channel) => channel.id));
+  const result = order.filter((id) => known.has(id));
+  const seen = new Set(result);
+  for (const channel of channels) {
+    if (!seen.has(channel.id)) result.push(channel.id);
+  }
+  return result;
+}
+
 function canOpenChannel(channel: Channel, unlocked: string[], isAdmin: boolean): boolean {
   return !channel.passwordProtected || isAdmin || unlocked.includes(channel.id);
 }
@@ -159,7 +182,10 @@ export const useApp = create<AppState>((set, get) => ({
   unlockedChannels: [],
   channelLock: null,
   messages: {},
+  messageCounts: {},
   unread: {},
+  sidebarCollapsed: defaultSidebarPrefs().collapsed,
+  channelOrder: [],
   dmMessages: {},
   dmConversations: [],
   dmPeer: null,
@@ -197,8 +223,10 @@ export const useApp = create<AppState>((set, get) => ({
       state.me.role === 'admin',
     );
     if (activeChannelId) localStorage.setItem('la2speak.lastChannel', activeChannelId);
+    const me = state.users.find((user) => user.sessionId === state.me.sessionId) ?? state.me;
+    const prefs = loadSidebarPrefs(me.id);
     set({
-      me: state.users.find((user) => user.sessionId === state.me.sessionId) ?? state.me,
+      me,
       users: state.users,
       channels: state.channels,
       broadcastGroups: state.broadcastGroups ?? [],
@@ -208,6 +236,9 @@ export const useApp = create<AppState>((set, get) => ({
       activeChannelId,
       unlockedChannels,
       channelLock: null,
+      messageCounts: state.messageCounts ?? {},
+      sidebarCollapsed: prefs.collapsed,
+      channelOrder: prefs.order,
     });
   },
 
@@ -233,7 +264,15 @@ export const useApp = create<AppState>((set, get) => ({
       state.me?.role === 'admin',
     );
     if (active) localStorage.setItem('la2speak.lastChannel', active);
-    set({ channels, activeChannelId: active, unlockedChannels });
+    const known = new Set(channels.map((channel) => channel.id));
+    const messageCounts = Object.fromEntries(
+      Object.entries(state.messageCounts).filter(([id]) => known.has(id)),
+    );
+    const channelOrder = state.channelOrder.filter((id) => known.has(id));
+    if (channelOrder.length !== state.channelOrder.length) {
+      saveSidebarPrefs(state.me?.id, { collapsed: state.sidebarCollapsed, order: channelOrder });
+    }
+    set({ channels, activeChannelId: active, unlockedChannels, messageCounts, channelOrder });
   },
 
   setBroadcastGroups: (broadcastGroups) => set({ broadcastGroups }),
@@ -266,6 +305,11 @@ export const useApp = create<AppState>((set, get) => ({
   setMessages: (channelId, messages) => {
     set((state) => ({
       messages: { ...state.messages, [channelId]: messages },
+      // Старый сервер мог не прислать счётчики: тогда опираемся на загруженную историю.
+      messageCounts:
+        state.messageCounts[channelId] === undefined
+          ? { ...state.messageCounts, [channelId]: messages.length }
+          : state.messageCounts,
     }));
   },
 
@@ -277,6 +321,10 @@ export const useApp = create<AppState>((set, get) => ({
     const isActive = state.activeChannelId === message.channelId;
     set({
       messages: { ...state.messages, [message.channelId]: next },
+      messageCounts: {
+        ...state.messageCounts,
+        [message.channelId]: (state.messageCounts[message.channelId] ?? list.length) + 1,
+      },
       unread: isActive
         ? state.unread
         : { ...state.unread, [message.channelId]: (state.unread[message.channelId] ?? 0) + 1 },
@@ -285,14 +333,50 @@ export const useApp = create<AppState>((set, get) => ({
 
   removeMessage: (channelId, messageId) => {
     const state = get();
+    const count = state.messageCounts[channelId];
+    const messageCounts =
+      count === undefined
+        ? state.messageCounts
+        : { ...state.messageCounts, [channelId]: Math.max(0, count - 1) };
     const list = state.messages[channelId];
-    if (!list) return;
+    if (!list) {
+      if (messageCounts !== state.messageCounts) set({ messageCounts });
+      return;
+    }
     set({
       messages: {
         ...state.messages,
         [channelId]: list.filter((message) => message.id !== messageId),
       },
+      messageCounts,
     });
+  },
+
+  toggleSidebarSection: (section) => {
+    const state = get();
+    const sidebarCollapsed = {
+      ...state.sidebarCollapsed,
+      [section]: !state.sidebarCollapsed[section],
+    };
+    saveSidebarPrefs(state.me?.id, { collapsed: sidebarCollapsed, order: state.channelOrder });
+    set({ sidebarCollapsed });
+  },
+
+  moveChannel: (sourceId, targetId, after) => {
+    const state = get();
+    const source = state.channels.find((channel) => channel.id === sourceId);
+    const target = state.channels.find((channel) => channel.id === targetId);
+    // Переставляем только внутри своего раздела: голосовые и текстовые не смешиваются.
+    if (!source || !target || source.type !== target.type || sourceId === targetId) return;
+    const ids = orderedChannelIds(state.channels, state.channelOrder);
+    const from = ids.indexOf(sourceId);
+    if (from === -1) return;
+    ids.splice(from, 1);
+    const to = ids.indexOf(targetId);
+    if (to === -1) return;
+    ids.splice(after ? to + 1 : to, 0, sourceId);
+    saveSidebarPrefs(state.me?.id, { collapsed: state.sidebarCollapsed, order: ids });
+    set({ channelOrder: ids });
   },
 
   setDmConversations: (dmConversations) => set({ dmConversations }),
@@ -319,10 +403,15 @@ export const useApp = create<AppState>((set, get) => ({
     const list = state.dmMessages[peer.id] ?? [];
     if (list.some((item) => item.id === message.id)) return;
     const active = state.dmPeer?.id === peer.id;
+    const previous = state.dmConversations.find((item) => item.peer.id === peer.id);
     set({
       dmMessages: { ...state.dmMessages, [peer.id]: [...list, message].slice(-300) },
       dmConversations: [
-        { peer, last: message },
+        {
+          peer,
+          last: message,
+          count: previous ? (previous.count === undefined ? undefined : previous.count + 1) : 1,
+        },
         ...state.dmConversations.filter((item) => item.peer.id !== peer.id),
       ],
       dmUnread:
@@ -420,7 +509,10 @@ export const useApp = create<AppState>((set, get) => ({
       unlockedChannels: [],
       channelLock: null,
       messages: {},
+      messageCounts: {},
       unread: {},
+      sidebarCollapsed: defaultSidebarPrefs().collapsed,
+      channelOrder: [],
       dmMessages: {},
       dmConversations: [],
       dmPeer: null,

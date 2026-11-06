@@ -3,8 +3,9 @@ import { getSocket, disconnectSocket } from './socket';
 import { voice } from './voice';
 import { desktop } from './desktop';
 import { openScreenSharePicker } from './screenPicker';
+import { forgetPushOnLogout } from './push';
 import type { MicSettings } from './settings';
-import { hasPermission, type Channel, type OnlineUser } from '@tsds/shared';
+import { hasPermission, type Channel, type DmCandidate, type OnlineUser } from '@tsds/shared';
 
 export function toast(type: 'ok' | 'error' | 'info', text: string): void {
   useApp.getState().pushToast(type, text);
@@ -15,6 +16,7 @@ export function loginWithToken(token: string): void {
 }
 
 export function logout(): void {
+  forgetPushOnLogout(useApp.getState().token);
   getSocket()?.disconnect();
   disconnectSocket();
   voice.reset();
@@ -252,6 +254,17 @@ export function refreshDmConversations(): void {
     if (result.ok && result.conversations) {
       useApp.getState().setDmConversations(result.conversations);
     }
+  });
+}
+
+export function loadDmParticipants(onLoaded: (participants: DmCandidate[]) => void): void {
+  const socket = getSocket();
+  if (!socket?.connected) {
+    onLoaded([]);
+    return;
+  }
+  socket.emit('dm:participants', (result) => {
+    onLoaded(result.ok ? (result.participants ?? []) : []);
   });
 }
 

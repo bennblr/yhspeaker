@@ -62,6 +62,10 @@ let pendingDisplaySourceId = null;
 const OVERLAY_WIDTH = 200;
 const OVERLAY_ROW = 24;
 const OVERLAY_EDIT_BAR = 30;
+const OVERLAY_FONT_DEFAULT = 11;
+const OVERLAY_FONT_MIN = 10;
+const OVERLAY_FONT_MAX = 24;
+const OVERLAY_COLOR_DEFAULT = '#dfe5f2';
 const OVERLAY_ANCHORS = [
   'top-left',
   'top-center',
@@ -85,6 +89,28 @@ function sanitizeOverlayPosition(value) {
   const y = Number(value.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return { x: Math.round(x), y: Math.round(y) };
+}
+
+function sanitizeOverlayFontSize(value) {
+  const size = Math.round(Number(value));
+  if (!Number.isFinite(size)) return OVERLAY_FONT_DEFAULT;
+  return Math.min(OVERLAY_FONT_MAX, Math.max(OVERLAY_FONT_MIN, size));
+}
+
+function sanitizeOverlayColor(value) {
+  const color = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^#[0-9a-f]{6}$/.test(color) ? color : OVERLAY_COLOR_DEFAULT;
+}
+
+// Окно оверлея растёт вместе со шрифтом: строки и ширина должны совпадать
+// с CSS в overlay.html, иначе имена обрезаются или появляется пустое место.
+function overlayMetrics() {
+  const fontSize = sanitizeOverlayFontSize(stored.overlayFontSize);
+  return {
+    fontSize,
+    width: OVERLAY_WIDTH + (fontSize - OVERLAY_FONT_DEFAULT) * 8,
+    row: OVERLAY_ROW + (fontSize - OVERLAY_FONT_DEFAULT),
+  };
 }
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
@@ -116,6 +142,8 @@ function loadConfig() {
       overlayEnabled: parsed.overlayEnabled !== false,
       overlayAnchor: normalizeOverlayAnchor(parsed.overlayAnchor),
       overlayPosition: sanitizeOverlayPosition(parsed.overlayPosition),
+      overlayFontSize: sanitizeOverlayFontSize(parsed.overlayFontSize),
+      overlayColor: sanitizeOverlayColor(parsed.overlayColor),
       servers: sanitizeServers(parsed.servers),
     };
   } catch {
@@ -125,6 +153,8 @@ function loadConfig() {
       overlayEnabled: true,
       overlayAnchor: 'top-left',
       overlayPosition: null,
+      overlayFontSize: OVERLAY_FONT_DEFAULT,
+      overlayColor: OVERLAY_COLOR_DEFAULT,
       servers: [],
     };
   }
@@ -312,10 +342,11 @@ function sanitizeOverlayState(value) {
 function overlayBounds(count) {
   const area = screen.getPrimaryDisplay().workArea;
   const rows = Math.min(Math.max(count, 1), 30);
-  const width = OVERLAY_WIDTH;
+  const metrics = overlayMetrics();
+  const width = metrics.width;
   const heightLimit = Math.round(area.height * 0.7);
   const height = Math.min(
-    14 + rows * OVERLAY_ROW + (overlayEditing ? OVERLAY_EDIT_BAR : 0),
+    14 + rows * metrics.row + (overlayEditing ? OVERLAY_EDIT_BAR : 0),
     heightLimit,
   );
   const margin = 12;
@@ -357,6 +388,15 @@ function overlayBounds(count) {
 function sendOverlayEdit() {
   if (overlayWindow && !overlayWindow.isDestroyed() && overlayReady) {
     overlayWindow.webContents.send('overlay:edit', overlayEditing);
+  }
+}
+
+function sendOverlayStyle() {
+  if (overlayWindow && !overlayWindow.isDestroyed() && overlayReady) {
+    overlayWindow.webContents.send('overlay:style', {
+      fontSize: sanitizeOverlayFontSize(stored.overlayFontSize),
+      color: sanitizeOverlayColor(stored.overlayColor),
+    });
   }
 }
 
@@ -451,6 +491,7 @@ function ensureOverlayWindow() {
     overlayReady = true;
     if (overlayState) overlayWindow?.webContents.send('overlay:state', overlayState);
     sendOverlayEdit();
+    sendOverlayStyle();
   });
   void overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
   return overlayWindow;
@@ -468,6 +509,7 @@ function applyOverlay() {
   overlayMoveGuardUntil = Date.now() + 250;
   win.setBounds(overlayBounds(overlayState ? overlayState.participants.length : 1));
   if (overlayReady) win.webContents.send('overlay:state', overlayState);
+  sendOverlayStyle();
   if (!win.isVisible()) win.showInactive();
 }
 
@@ -493,6 +535,8 @@ function overlayConfig() {
     anchor: normalizeOverlayAnchor(stored.overlayAnchor),
     position: stored.overlayPosition ?? null,
     editing: overlayEditing,
+    fontSize: sanitizeOverlayFontSize(stored.overlayFontSize),
+    color: sanitizeOverlayColor(stored.overlayColor),
   };
 }
 
@@ -514,6 +558,10 @@ function applyOverlayConfig(patch) {
     if (typeof patch.anchor === 'string' && normalizeOverlayAnchor(patch.anchor) === patch.anchor) {
       stored.overlayAnchor = patch.anchor;
     }
+    if (patch.fontSize !== undefined) {
+      stored.overlayFontSize = sanitizeOverlayFontSize(patch.fontSize);
+    }
+    if (patch.color !== undefined) stored.overlayColor = sanitizeOverlayColor(patch.color);
     if (typeof patch.editing === 'boolean') setOverlayEditing(patch.editing);
     saveConfig(stored);
   }

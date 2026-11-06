@@ -1,5 +1,7 @@
 import { createContext, useContext, useMemo, useState, type DragEvent } from 'react';
 import {
+  ChevronRight,
+  GripVertical,
   Hash,
   HeadphoneOff,
   Lock,
@@ -39,6 +41,19 @@ interface DragState {
 }
 
 const DragContext = createContext<DragState | null>(null);
+
+interface ChannelDragState {
+  activeId: string | null;
+  overId: string | null;
+  after: boolean;
+  start: (event: DragEvent<HTMLElement>, channel: Channel) => void;
+  end: () => void;
+  over: (event: DragEvent<HTMLElement>, channel: Channel) => void;
+  leave: (event: DragEvent<HTMLElement>) => void;
+  drop: (event: DragEvent<HTMLElement>, channel: Channel) => boolean;
+}
+
+const CHANNEL_DRAG_TYPE = 'application/x-tsds-channel';
 
 function ParticipantRow({ user, speaking }: { user: OnlineUser; speaking: boolean }) {
   const me = useApp((state) => state.me);
@@ -254,16 +269,20 @@ function ChannelRow({
   users,
   speaking,
   unread,
+  messageCount,
   connected,
   active,
+  channelDrag,
   onClick,
 }: {
   channel: Channel;
   users: OnlineUser[];
   speaking: Set<string>;
   unread: number;
+  messageCount: number;
   connected: boolean;
   active: boolean;
+  channelDrag: ChannelDragState;
   onClick: () => void;
 }) {
   const Icon = channel.type === 'voice' ? Volume2 : Hash;
@@ -272,69 +291,104 @@ function ChannelRow({
     drag?.user && channel.type === 'voice' && drag.user.channelId !== channel.id,
   );
   const dropActive = acceptsDrop && drag?.overChannelId === channel.id;
+  const dragging = channelDrag.activeId === channel.id;
+  const dropBefore = channelDrag.overId === channel.id && !channelDrag.after;
+  const dropAfter = channelDrag.overId === channel.id && channelDrag.after;
 
   return (
     <div
-      onDragOver={
-        acceptsDrop
-          ? (event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = 'move';
-              drag?.setOver(channel.id);
-            }
-          : undefined
-      }
-      onDragLeave={acceptsDrop ? () => drag?.setOver(null) : undefined}
-      onDrop={
-        acceptsDrop
-          ? (event) => {
-              event.preventDefault();
-              drag?.setOver(null);
-              if (drag?.user) moveUserToChannel(drag.user, channel);
-              drag?.end();
-            }
-          : undefined
-      }
+      className={cn(dragging && 'opacity-40')}
+      onDragOver={(event) => {
+        if (channelDrag.activeId) {
+          channelDrag.over(event, channel);
+          return;
+        }
+        if (!acceptsDrop) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        drag?.setOver(channel.id);
+      }}
+      onDragLeave={(event) => {
+        if (channelDrag.activeId) channelDrag.leave(event);
+        else if (acceptsDrop) drag?.setOver(null);
+      }}
+      onDrop={(event) => {
+        if (channelDrag.activeId && channelDrag.drop(event, channel)) return;
+        if (!acceptsDrop) return;
+        event.preventDefault();
+        drag?.setOver(null);
+        if (drag?.user) moveUserToChannel(drag.user, channel);
+        drag?.end();
+      }}
     >
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          'sidebar-item group',
-          active && 'sidebar-item-active',
-          channel.type === 'voice' && connected && 'text-slate-100',
-          dropActive && 'bg-accent/15 ring-1 ring-inset ring-accent/60',
+      <div className="relative">
+        {dropBefore && (
+          <span className="pointer-events-none absolute inset-x-1 top-0 z-10 h-0.5 rounded-full bg-accent" />
         )}
-      >
-        <Icon
+        <button
+          type="button"
+          draggable
+          onDragStart={(event) => channelDrag.start(event, channel)}
+          onDragEnd={channelDrag.end}
+          onClick={onClick}
+          title="Перетащите, чтобы изменить порядок"
           className={cn(
-            'h-4 w-4 shrink-0',
-            channel.type === 'voice' && connected ? 'text-ok' : 'text-muted',
+            'sidebar-item group',
+            active && 'sidebar-item-active',
+            channel.type === 'voice' && connected && 'text-slate-100',
+            dropActive && 'bg-accent/15 ring-1 ring-inset ring-accent/60',
           )}
-        />
-        <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-        {channel.passwordProtected && (
-          <span className="shrink-0 text-muted" title="Канал защищён паролем">
-            <Lock className="h-3 w-3" />
-          </span>
+        >
+          <GripVertical
+            className="h-3 w-3 shrink-0 text-muted/35 transition group-hover:text-muted/80"
+            aria-hidden
+          />
+          <Icon
+            className={cn(
+              'h-4 w-4 shrink-0',
+              channel.type === 'voice' && connected ? 'text-ok' : 'text-muted',
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+          {channel.passwordProtected && (
+            <span className="shrink-0 text-muted" title="Канал защищён паролем">
+              <Lock className="h-3 w-3" />
+            </span>
+          )}
+          {channel.type === 'voice' && connected && (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+          )}
+          {channel.type === 'voice' && (
+            <span
+              className="shrink-0 text-[10px] font-semibold text-muted"
+              title={`Участников: ${users.length}`}
+            >
+              {users.length}
+            </span>
+          )}
+          {channel.type === 'text' && (
+            <span
+              className="shrink-0 text-[10px] font-semibold text-muted/80"
+              title={`Сообщений: ${messageCount}`}
+            >
+              {messageCount > 999 ? '999+' : messageCount}
+            </span>
+          )}
+          {channel.type === 'text' && unread > 0 && (
+            <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
+          {channel.type === 'voice' && !connected && users.length > 0 && (
+            <span className="hidden items-center gap-1 text-[10px] text-muted group-hover:flex">
+              войти
+            </span>
+          )}
+        </button>
+        {dropAfter && (
+          <span className="pointer-events-none absolute inset-x-1 bottom-0 z-10 h-0.5 rounded-full bg-accent" />
         )}
-        {channel.type === 'voice' && connected && (
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
-        )}
-        {channel.type === 'voice' && users.length > 0 && (
-          <span className="shrink-0 text-[10px] font-semibold text-muted">{users.length}</span>
-        )}
-        {channel.type === 'text' && unread > 0 && (
-          <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">
-            {unread > 99 ? '99+' : unread}
-          </span>
-        )}
-        {channel.type === 'voice' && !connected && users.length > 0 && (
-          <span className="hidden items-center gap-1 text-[10px] text-muted group-hover:flex">
-            войти
-          </span>
-        )}
-      </button>
+      </div>
       {channel.type === 'voice' && users.length > 0 && (
         <>
           <div className="mb-1 hidden space-y-0.5 md:block">
@@ -357,18 +411,36 @@ function ChannelRow({
 
 function SectionTitle({
   children,
+  collapsed,
+  onToggle,
   onAdd,
   addTitle = 'Создать канал',
 }: {
   children: string;
+  collapsed: boolean;
+  onToggle: () => void;
   onAdd?: () => void;
   addTitle?: string;
 }) {
   return (
     <div className="flex items-center justify-between px-2 pb-1 pt-3">
-      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted/80">
-        {children}
-      </span>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        title={collapsed ? 'Развернуть раздел' : 'Свернуть раздел'}
+        className="group/section flex min-w-0 items-center gap-1 rounded px-0.5 py-0.5"
+      >
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-muted/70 transition-transform group-hover/section:text-slate-200',
+            !collapsed && 'rotate-90',
+          )}
+        />
+        <span className="truncate text-[10px] font-bold uppercase tracking-[0.16em] text-muted/80 transition group-hover/section:text-slate-200">
+          {children}
+        </span>
+      </button>
       {onAdd && (
         <button
           type="button"
@@ -399,20 +471,40 @@ export function Sidebar({
   const config = useApp((state) => state.config);
   const activeChannelId = useApp((state) => state.activeChannelId);
   const unread = useApp((state) => state.unread);
+  const messageCounts = useApp((state) => state.messageCounts);
+  const sidebarCollapsed = useApp((state) => state.sidebarCollapsed);
+  const channelOrder = useApp((state) => state.channelOrder);
   const dmConversations = useApp((state) => state.dmConversations);
   const dmPeer = useApp((state) => state.dmPeer);
   const dmUnread = useApp((state) => state.dmUnread);
   const speaking = useApp((state) => state.speaking);
   const voiceChannelId = useApp((state) => state.voice.channelId);
   const connection = useApp((state) => state.connection);
+  const toggleSidebarSection = useApp((state) => state.toggleSidebarSection);
+  const moveChannel = useApp((state) => state.moveChannel);
 
   const speakingSet = new Set(speaking);
-  const voiceChannels = channels.filter((channel) => channel.type === 'voice');
-  const textChannels = channels.filter((channel) => channel.type === 'text');
+  const orderedChannels = useMemo(() => {
+    const rank = new Map(channelOrder.map((id, index) => [id, index]));
+    return [...channels].sort((a, b) => {
+      const left = rank.get(a.id);
+      const right = rank.get(b.id);
+      if (left === undefined && right === undefined) return 0;
+      if (left === undefined) return 1;
+      if (right === undefined) return -1;
+      return left - right;
+    });
+  }, [channels, channelOrder]);
+  const voiceChannels = orderedChannels.filter((channel) => channel.type === 'voice');
+  const textChannels = orderedChannels.filter((channel) => channel.type === 'text');
   const canManageChannels = hasPermission(me, roles, 'channels');
 
   const [dragUser, setDragUser] = useState<OnlineUser | null>(null);
   const [overChannelId, setOverChannelId] = useState<string | null>(null);
+  const [dragChannel, setDragChannel] = useState<{ id: string; type: Channel['type'] } | null>(
+    null,
+  );
+  const [channelDrop, setChannelDrop] = useState<{ id: string; after: boolean } | null>(null);
   const [newDmOpen, setNewDmOpen] = useState(false);
   const dragState = useMemo<DragState>(
     () => ({
@@ -431,6 +523,53 @@ export function Sidebar({
       setOver: setOverChannelId,
     }),
     [dragUser, overChannelId],
+  );
+  const channelDrag = useMemo<ChannelDragState>(
+    () => ({
+      activeId: dragChannel?.id ?? null,
+      overId: channelDrop?.id ?? null,
+      after: channelDrop?.after ?? false,
+      start: (event, channel) => {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData(CHANNEL_DRAG_TYPE, channel.id);
+        setDragChannel({ id: channel.id, type: channel.type });
+        setChannelDrop(null);
+      },
+      end: () => {
+        setDragChannel(null);
+        setChannelDrop(null);
+      },
+      over: (event, channel) => {
+        if (!dragChannel || dragChannel.id === channel.id || dragChannel.type !== channel.type) {
+          return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        const rect = event.currentTarget.getBoundingClientRect();
+        const after = event.clientY > rect.top + rect.height / 2;
+        setChannelDrop((prev) =>
+          prev?.id === channel.id && prev.after === after ? prev : { id: channel.id, after },
+        );
+      },
+      leave: (event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        setChannelDrop(null);
+      },
+      drop: (event, channel) => {
+        if (!dragChannel || dragChannel.id === channel.id || dragChannel.type !== channel.type) {
+          return false;
+        }
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const after = event.clientY > rect.top + rect.height / 2;
+        moveChannel(dragChannel.id, channel.id, after);
+        setDragChannel(null);
+        setChannelDrop(null);
+        return true;
+      },
+    }),
+    [dragChannel, channelDrop, moveChannel],
   );
 
   function handleChannel(channel: Channel) {
@@ -474,81 +613,116 @@ export function Sidebar({
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
         <DragContext.Provider value={dragState}>
-        <SectionTitle onAdd={() => setNewDmOpen(true)} addTitle="Начать личный чат">
+        <SectionTitle
+          collapsed={sidebarCollapsed.dm}
+          onToggle={() => toggleSidebarSection('dm')}
+          onAdd={() => setNewDmOpen(true)}
+          addTitle="Начать личный чат"
+        >
           Личные сообщения
         </SectionTitle>
-        <div className="space-y-0.5">
-          {dmConversations.map((conversation) => {
-            const count = dmUnread[conversation.peer.id] ?? 0;
-            return (
-              <button
-                key={conversation.peer.id}
-                type="button"
-                onClick={() => {
-                  openDirectChat(conversation.peer);
-                  onNavigate?.();
-                }}
-                className={cn(
-                  'sidebar-item group',
-                  dmPeer?.id === conversation.peer.id && 'sidebar-item-active',
-                )}
-                title={`Личный чат с ${conversation.peer.displayName}`}
-              >
-                <Avatar
-                  id={conversation.peer.id}
-                  name={conversation.peer.displayName}
-                  size="xs"
-                />
-                <span className="min-w-0 flex-1 truncate">{conversation.peer.displayName}</span>
-                {count > 0 && (
-                  <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">
-                    {count > 99 ? '99+' : count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {dmConversations.length === 0 && (
-            <p className="px-2 pb-1 text-[11px] leading-relaxed text-muted/80">
-              Нажмите «+», чтобы написать участнику.
-            </p>
-          )}
-        </div>
+        {!sidebarCollapsed.dm && (
+          <div className="space-y-0.5">
+            {dmConversations.map((conversation) => {
+              const count = dmUnread[conversation.peer.id] ?? 0;
+              return (
+                <button
+                  key={conversation.peer.id}
+                  type="button"
+                  onClick={() => {
+                    openDirectChat(conversation.peer);
+                    onNavigate?.();
+                  }}
+                  className={cn(
+                    'sidebar-item group',
+                    dmPeer?.id === conversation.peer.id && 'sidebar-item-active',
+                  )}
+                  title={`Личный чат с ${conversation.peer.displayName}`}
+                >
+                  <Avatar
+                    id={conversation.peer.id}
+                    name={conversation.peer.displayName}
+                    size="xs"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{conversation.peer.displayName}</span>
+                  {conversation.count !== undefined && (
+                    <span
+                      className="shrink-0 text-[10px] font-semibold text-muted/80"
+                      title={`Сообщений: ${conversation.count}`}
+                    >
+                      {conversation.count > 999 ? '999+' : conversation.count}
+                    </span>
+                  )}
+                  {count > 0 && (
+                    <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {dmConversations.length === 0 && (
+              <p className="px-2 pb-1 text-[11px] leading-relaxed text-muted/80">
+                Нажмите «+», чтобы написать участнику.
+              </p>
+            )}
+          </div>
+        )}
 
-        <SectionTitle onAdd={canManageChannels ? onOpenAdmin : undefined}>Голосовые каналы</SectionTitle>
-        <div className="space-y-0.5">
-          {voiceChannels.map((channel) => {
-            const inChannel = users.filter((user) => user.channelId === channel.id);
-            return (
+        <SectionTitle
+          collapsed={sidebarCollapsed.voice}
+          onToggle={() => toggleSidebarSection('voice')}
+          onAdd={canManageChannels ? onOpenAdmin : undefined}
+        >
+          Голосовые каналы
+        </SectionTitle>
+        {!sidebarCollapsed.voice && (
+          <div className="space-y-0.5">
+            {voiceChannels.map((channel) => {
+              const inChannel = users.filter((user) => user.channelId === channel.id);
+              return (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  users={inChannel}
+                  speaking={speakingSet}
+                  unread={0}
+                  messageCount={0}
+                  connected={voiceChannelId === channel.id}
+                  active={!dmPeer && activeChannelId === channel.id}
+                  channelDrag={channelDrag}
+                  onClick={() => handleChannel(channel)}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        <SectionTitle
+          collapsed={sidebarCollapsed.text}
+          onToggle={() => toggleSidebarSection('text')}
+          onAdd={canManageChannels ? onOpenAdmin : undefined}
+        >
+          Текстовые каналы
+        </SectionTitle>
+        {!sidebarCollapsed.text && (
+          <div className="space-y-0.5">
+            {textChannels.map((channel) => (
               <ChannelRow
                 key={channel.id}
                 channel={channel}
-                users={inChannel}
+                users={[]}
                 speaking={speakingSet}
-                unread={0}
-                connected={voiceChannelId === channel.id}
+                unread={unread[channel.id] ?? 0}
+                messageCount={messageCounts[channel.id] ?? 0}
+                connected={false}
                 active={!dmPeer && activeChannelId === channel.id}
+                channelDrag={channelDrag}
                 onClick={() => handleChannel(channel)}
               />
-            );
-          })}
-        </div>
-
-        <SectionTitle onAdd={canManageChannels ? onOpenAdmin : undefined}>Текстовые каналы</SectionTitle>
-        <div className="space-y-0.5">
-          {textChannels.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              users={[]}
-              speaking={speakingSet}
-              unread={unread[channel.id] ?? 0}
-              connected={false}
-              active={!dmPeer && activeChannelId === channel.id}
-              onClick={() => handleChannel(channel)}
-            />
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {channels.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-muted">

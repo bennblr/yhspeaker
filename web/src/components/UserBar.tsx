@@ -38,7 +38,7 @@ function TipButton({
         onClick={onClick}
         disabled={disabled}
         className={cn(
-          'icon-btn relative',
+          'icon-btn relative h-8 w-8',
           active && 'icon-btn-active',
           danger && 'text-danger hover:text-danger',
           disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
@@ -74,7 +74,7 @@ export function UserBar({
   const roleText = roleLabel(me, roles);
 
   return (
-    <div className="flex items-center gap-2 border-t border-line bg-[#0d1017] px-2.5 py-2.5">
+    <div className="flex min-w-0 items-center gap-1 border-t border-line bg-[#0d1017] px-2 py-2">
       <div className="relative shrink-0">
         <Avatar id={me.id} name={me.displayName} size="sm" speaking={voice.pttActive} />
         <span
@@ -109,7 +109,7 @@ export function UserBar({
         </div>
       </div>
 
-      <div className="flex items-center gap-0.5">
+      <div className="flex shrink-0 items-center gap-0">
         <TipButton
           label={
             inVoice

@@ -12,6 +12,8 @@
       :root {
         color-scheme: dark;
         --ok: #3ddc97;
+        --overlay-font: 11px;
+        --overlay-color: #dfe5f2;
       }
 
       * {
@@ -104,15 +106,15 @@
       .row {
         display: flex;
         align-items: center;
-        gap: 7px;
-        height: 22px;
+        gap: calc(var(--overlay-font) * 0.64);
+        height: calc(var(--overlay-font) + 11px);
         padding: 0 4px;
         flex: 0 0 auto;
       }
 
       .activity {
-        width: 8px;
-        height: 8px;
+        width: calc(var(--overlay-font) * 0.73);
+        height: calc(var(--overlay-font) * 0.73);
         border-radius: 50%;
         flex-shrink: 0;
         visibility: hidden;
@@ -129,9 +131,9 @@
       .name {
         flex: 1;
         min-width: 0;
-        font-size: 11px;
+        font-size: var(--overlay-font);
         font-weight: 500;
-        color: #dfe5f2;
+        color: var(--overlay-color);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;

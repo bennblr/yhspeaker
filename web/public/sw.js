@@ -1,4 +1,4 @@
-const VERSION = 'la2speak-v2';
+const VERSION = 'la2speak-v3';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const SHELL_PATHS = ['/app', '/'];
@@ -107,4 +107,76 @@ self.addEventListener('fetch', (event) => {
   if (isAsset(url.pathname)) {
     event.respondWith(cacheFirstAsset(request));
   }
+});
+
+// ---------- уведомления о личных сообщениях ----------
+
+function readPushPayload(event) {
+  if (!event.data) return null;
+  try {
+    return event.data.json();
+  } catch {
+    try {
+      return { title: 'Новое сообщение', body: event.data.text() };
+    } catch {
+      return null;
+    }
+  }
+}
+
+self.addEventListener('push', (event) => {
+  const payload = readPushPayload(event);
+  if (!payload || payload.type !== 'dm') return;
+  const userId = typeof payload.userId === 'string' ? payload.userId : '';
+  const title = typeof payload.title === 'string' && payload.title ? payload.title : 'Новое сообщение';
+  const body = typeof payload.body === 'string' ? payload.body : '';
+
+  event.waitUntil(
+    (async () => {
+      // Открытое приложение само показывает сообщение в интерфейсе —
+      // системное уведомление в этом случае только мешает.
+      const windows = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+      const focused = windows.find(
+        (client) => client.focused && client.visibilityState === 'visible',
+      );
+      if (focused) {
+        focused.postMessage({ type: 'dm:received', userId });
+        return;
+      }
+      await self.registration.showNotification(title, {
+        body,
+        lang: 'ru',
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        tag: userId ? `dm:${userId}` : 'dm',
+        renotify: true,
+        data: { userId },
+      });
+    })(),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  const userId = event.notification.data?.userId ?? '';
+  event.notification.close();
+  event.waitUntil(
+    (async () => {
+      const url = new URL('/app', self.location.origin);
+      if (userId) url.searchParams.set('dm', userId);
+      const windows = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+      for (const client of windows) {
+        if (new URL(client.url).origin !== self.location.origin) continue;
+        await client.focus();
+        client.postMessage({ type: 'dm:open', userId });
+        return;
+      }
+      await self.clients.openWindow(url.href);
+    })(),
+  );
 });

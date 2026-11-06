@@ -23,7 +23,9 @@ import {
   type DeviceInfo,
   type DeviceKind,
   type DirectMessage,
+  type DmCandidate,
   type DmParticipant,
+  type OnlineUser,
   type PermissionKey,
   type RolePermissions,
 } from '@tsds/shared';
@@ -37,6 +39,7 @@ import { config } from './config.js';
 import { SessionService } from './session.js';
 import { StatsRecorder } from './stats.js';
 import { Store } from './store.js';
+import { PushService } from './push.js';
 import { VoiceManager } from './voice.js';
 import type { AppServer, AppSocket } from './types.js';
 
@@ -60,6 +63,7 @@ const io: AppServer = new Server(httpServer, {
 const sessions = new SessionService(io);
 const socketAccounts = new Map<string, Account>();
 const stats = new StatsRecorder(sessions, config.dataDir);
+const push = new PushService(store, config.dataDir);
 
 const auth = new AuthService(store, config, (name) => {
   return (
@@ -200,6 +204,19 @@ const directMessageSchema = z.object({
     .trim()
     .min(1, 'Сообщение пустое')
     .max(MAX_MESSAGE_LENGTH, `Сообщение длиннее ${MAX_MESSAGE_LENGTH} символов`),
+});
+
+const pushSubscribeSchema = z.object({
+  endpoint: z.string().trim().min(10).max(2048),
+  keys: z.object({
+    p256dh: z.string().trim().min(1).max(512),
+    auth: z.string().trim().min(1).max(512),
+  }),
+  device: z.string().trim().max(40).optional(),
+});
+
+const pushUnsubscribeSchema = z.object({
+  endpoint: z.string().trim().min(10).max(2048),
 });
 
 const channelNameSchema = z
@@ -349,6 +366,52 @@ function dmParticipant(userId: string): DmParticipant | null {
   };
 }
 
+// Все аккаунты сервера плюс гости, которые есть только в живых сессиях.
+// Офлайн-аккаунты остаются в списке: сообщение сохранится и дойдёт при входе.
+function dmCandidates(userId: string): DmCandidate[] {
+  const onlineByUser = new Map<string, OnlineUser>();
+  for (const session of sessions.list()) {
+    if (session.id !== userId && !onlineByUser.has(session.id)) {
+      onlineByUser.set(session.id, session);
+    }
+  }
+
+  const candidates = new Map<string, DmCandidate>();
+  for (const user of store.users()) {
+    if (user.id === userId || user.banned) continue;
+    const online = onlineByUser.get(user.id);
+    candidates.set(user.id, {
+      id: user.id,
+      displayName: online?.displayName ?? user.displayName,
+      label: online?.label ?? user.label,
+      role: online?.role ?? user.role,
+      isGuest: false,
+      roleIds: online?.roleIds ?? user.roleIds,
+      online: Boolean(online),
+      deviceName: online?.deviceName,
+    });
+  }
+
+  for (const online of onlineByUser.values()) {
+    if (candidates.has(online.id) || store.userById(online.id)) continue;
+    candidates.set(online.id, {
+      id: online.id,
+      displayName: online.displayName,
+      label: online.label,
+      role: online.role,
+      isGuest: online.isGuest,
+      roleIds: online.roleIds,
+      online: true,
+      deviceName: online.deviceName,
+    });
+  }
+
+  return [...candidates.values()].sort((a, b) => {
+    if (a.online !== b.online) return a.online ? -1 : 1;
+    return a.displayName.localeCompare(b.displayName, 'ru');
+  });
+}
+
 function channelSockets(channel: Channel) {
   return sessions
     .list()
@@ -484,6 +547,45 @@ app.get(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     res.json({ account });
+  }),
+);
+
+// ---------- Web Push ----------
+
+app.get(
+  '/api/push/key',
+  wrap((req, res) => {
+    accountFromRequest(req);
+    res.json({ key: push.available ? push.publicKey : null });
+  }),
+);
+
+app.post(
+  '/api/push/subscribe',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    if (!push.available) throw new HttpError(503, 'Уведомления недоступны на сервере');
+    const body = parseBody(pushSubscribeSchema, req.body);
+    if (!PushService.validEndpoint(body.endpoint)) {
+      throw new HttpError(400, 'Некорректный адрес подписки');
+    }
+    push.subscribe(account.id, {
+      endpoint: body.endpoint,
+      p256dh: body.keys.p256dh,
+      auth: body.keys.auth,
+      device: body.device,
+    });
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/push/unsubscribe',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    const body = parseBody(pushUnsubscribeSchema, req.body);
+    push.unsubscribe(account.id, body.endpoint);
+    res.json({ ok: true });
   }),
 );
 
@@ -835,14 +937,18 @@ io.on('connection', async (socket: AppSocket) => {
   const device = socket.data.device ?? guessDevice(undefined);
 
   const online = sessions.register(socket, account, device);
+  const visibleChannels = channelsFor(account);
   socket.emit('state:init', {
     me: online,
     users: sessions.list(),
-    channels: channelsFor(account),
+    channels: visibleChannels,
     broadcastGroups: canSeeGroups(account) ? store.broadcastGroups() : [],
     roles: store.roles(),
     routerRtpCapabilities: voice.rtpCapabilities(),
     config: clientConfigFor(account),
+    messageCounts: Object.fromEntries(
+      visibleChannels.map((channel) => [channel.id, store.messageCount(channel.id)]),
+    ),
   });
 
   const chatTimestamps: number[] = [];
@@ -999,6 +1105,9 @@ io.on('connection', async (socket: AppSocket) => {
       for (const target of new Set([...sessions.socketsOf(userId), ...sessions.socketsOf(to.id)])) {
         target.emit('dm:message', message);
       }
+      // Даже при закрытом приложении на телефоне уведомление придёт через
+      // сервис-воркер: сокет для этого не нужен.
+      void push.notifyDirectMessage(to.id, from, message.text, message.ts);
       ack?.({ ok: true });
     } catch (error) {
       const message = error instanceof HttpError ? error.message : 'Не удалось отправить сообщение';
@@ -1011,6 +1120,14 @@ io.on('connection', async (socket: AppSocket) => {
       ack?.({ ok: true, conversations: store.dmConversations(userId) });
     } catch {
       ack?.({ ok: false, error: 'Не удалось загрузить личные сообщения' });
+    }
+  });
+
+  socket.on('dm:participants', (ack) => {
+    try {
+      ack?.({ ok: true, participants: dmCandidates(userId) });
+    } catch {
+      ack?.({ ok: false, error: 'Не удалось загрузить участников' });
     }
   });
 

@@ -22,7 +22,9 @@ import { preloadNoiseSuppressor } from './lib/micGate';
 import {
   endBroadcastHold,
   loadDmHistory,
+  loadDmParticipants,
   logout,
+  openDirectChat,
   refreshDmConversations,
   releaseBroadcastHolds,
   startBroadcastHold,
@@ -30,6 +32,7 @@ import {
   toggleBroadcastAll,
   toggleBroadcastGroup,
 } from './lib/actions';
+import { listenPushMessages, pushNotificationTarget, syncPushSubscription } from './lib/push';
 import { desktop, type BroadcastBinding } from './lib/desktop';
 import {
   isGlobalAccelerator,
@@ -134,9 +137,27 @@ function parseDesktopTarget(target: string): { target: string; priority: boolean
   return { target, priority: false };
 }
 
+// Переход из уведомления: собеседник может быть уже в списке переписок,
+// среди онлайн-участников или только в полном списке аккаунтов сервера.
+function openDmByUserId(userId: string): void {
+  const state = useApp.getState();
+  const known =
+    state.users.find((user) => user.id === userId) ??
+    state.dmConversations.find((item) => item.peer.id === userId)?.peer;
+  if (known) {
+    openDirectChat(known);
+    return;
+  }
+  loadDmParticipants((participants) => {
+    const candidate = participants.find((user) => user.id === userId);
+    if (candidate) openDirectChat(candidate);
+  });
+}
+
 export function App() {
   const token = useApp((state) => state.token);
   const tokenRef = useRef(token);
+  const pendingDmRef = useRef<string | null>(null);
   const me = useApp((state) => state.me);
   const connection = useApp((state) => state.connection);
   const channels = useApp((state) => state.channels);
@@ -215,6 +236,7 @@ export function App() {
 
     socket.on('connect', () => {
       useApp.getState().setConnection('online');
+      void syncPushSubscription(token);
     });
 
     socket.on('disconnect', () => {
@@ -237,6 +259,11 @@ export function App() {
       refreshDmConversations();
       const peer = useApp.getState().dmPeer;
       if (peer) loadDmHistory(peer.id);
+      const pendingDm = pendingDmRef.current;
+      if (pendingDm) {
+        pendingDmRef.current = null;
+        openDmByUserId(pendingDm);
+      }
     });
 
     socket.on('state:me', (next) => {
@@ -324,6 +351,20 @@ export function App() {
       socket.disconnect();
       voice.reset();
     };
+  }, [token]);
+
+  // Клик по уведомлению при уже открытом приложении: service worker
+  // присылает идентификатор отправителя, показываем с ним переписку.
+  useEffect(() => {
+    if (!token) return undefined;
+    const initial = pushNotificationTarget();
+    if (initial) {
+      window.history.replaceState(null, '', window.location.pathname);
+      pendingDmRef.current = initial;
+    }
+    return listenPushMessages((message) => {
+      if (message.type === 'dm:open') openDmByUserId(message.userId);
+    });
   }, [token]);
 
   useEffect(() => {

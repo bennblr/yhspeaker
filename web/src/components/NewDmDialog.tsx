@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
+import type { DmCandidate } from '@tsds/shared';
 import { Modal } from './Modal';
 import { Avatar } from './Avatar';
 import { LabelBadge } from './LabelBadge';
 import { useApp } from '../lib/store';
-import { openDirectChat } from '../lib/actions';
+import { loadDmParticipants, openDirectChat } from '../lib/actions';
 import { roleLabel } from '../lib/roles';
 import { cn } from '../lib/utils';
 
@@ -20,24 +21,75 @@ export function NewDmDialog({
   const me = useApp((state) => state.me);
   const users = useApp((state) => state.users);
   const roles = useApp((state) => state.roles);
+  const [serverCandidates, setServerCandidates] = useState<DmCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
 
-  // Один аккаунт может быть в сети с нескольких устройств — в списке он один.
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    loadDmParticipants((participants) => {
+      setServerCandidates(participants);
+      setLoading(false);
+    });
+  }, [open]);
+
+  // Сервер отдаёт все аккаунты, включая офлайн; живые сессии уточняют статус,
+  // ник и устройство. Один аккаунт с нескольких устройств показываем один раз.
   const candidates = useMemo(() => {
-    const unique = new Map<string, (typeof users)[number]>();
+    const onlineByUser = new Map<string, (typeof users)[number]>();
     for (const user of users) {
-      if (user.id === me?.id || unique.has(user.id)) continue;
-      unique.set(user.id, user);
+      if (!onlineByUser.has(user.id)) onlineByUser.set(user.id, user);
     }
-    const list = [...unique.values()].sort((a, b) =>
-      a.displayName.localeCompare(b.displayName, 'ru'),
-    );
+
+    const merged = new Map<string, DmCandidate>();
+    for (const candidate of serverCandidates) {
+      if (candidate.id === me?.id) continue;
+      const live = onlineByUser.get(candidate.id);
+      merged.set(
+        candidate.id,
+        live
+          ? {
+              ...candidate,
+              displayName: live.displayName,
+              label: live.label,
+              role: live.role,
+              isGuest: live.isGuest,
+              roleIds: live.roleIds,
+              online: true,
+              deviceName: live.deviceName,
+            }
+          : { ...candidate, online: false, deviceName: undefined },
+      );
+    }
+    for (const live of onlineByUser.values()) {
+      if (live.id === me?.id || merged.has(live.id)) continue;
+      merged.set(live.id, {
+        id: live.id,
+        displayName: live.displayName,
+        label: live.label,
+        role: live.role,
+        isGuest: live.isGuest,
+        roleIds: live.roleIds,
+        online: true,
+        deviceName: live.deviceName,
+      });
+    }
+
+    const list = [...merged.values()].sort((a, b) => {
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      return a.displayName.localeCompare(b.displayName, 'ru');
+    });
     const needle = query.trim().toLowerCase();
     if (!needle) return list;
-    return list.filter((user) => user.displayName.toLowerCase().includes(needle));
-  }, [users, me?.id, query]);
+    return list.filter(
+      (user) =>
+        user.displayName.toLowerCase().includes(needle) ||
+        user.label?.toLowerCase().includes(needle),
+    );
+  }, [serverCandidates, users, me?.id, query]);
 
-  function pick(user: (typeof users)[number]): void {
+  function pick(user: DmCandidate): void {
     openDirectChat(user);
     setQuery('');
     onClose();
@@ -52,7 +104,7 @@ export function NewDmDialog({
         onClose();
       }}
       title="Личный чат"
-      subtitle="Выберите участника, который сейчас в сети"
+      subtitle="Можно написать любому участнику сервера, даже если он не в сети"
       width="max-w-md"
     >
       <div className="relative mb-3">
@@ -76,7 +128,12 @@ export function NewDmDialog({
               'hover:bg-white/[0.05]',
             )}
           >
-            <Avatar id={user.id} name={user.displayName} size="sm" />
+            <Avatar
+              id={user.id}
+              name={user.displayName}
+              size="sm"
+              className={cn(!user.online && 'opacity-45 saturate-50')}
+            />
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1.5">
                 <span className="truncate text-sm font-medium text-slate-100">
@@ -84,16 +141,26 @@ export function NewDmDialog({
                 </span>
                 <LabelBadge label={user.label} />
               </span>
-              <span className="block truncate text-[11px] text-muted">
+              <span className="flex items-center gap-1.5 truncate text-[11px] text-muted">
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 shrink-0 rounded-full',
+                    user.online ? 'bg-ok' : 'bg-slate-600',
+                  )}
+                />
                 {roleLabel(user, roles)}
-                {user.deviceName ? ` · ${user.deviceName}` : ''}
+                {user.online ? (user.deviceName ? ` · ${user.deviceName}` : ' · в сети') : ' · не в сети'}
               </span>
             </span>
           </button>
         ))}
         {candidates.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-muted">
-            {query.trim() ? 'Никого не нашли' : 'Сейчас никого нет в сети'}
+            {query.trim()
+              ? 'Никого не нашли'
+              : loading
+                ? 'Загружаем участников…'
+                : 'На сервере пока нет других участников'}
           </p>
         )}
       </div>

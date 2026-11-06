@@ -83,6 +83,9 @@ export interface DesktopOverlayConfig {
   // перетаскивания. В старых клиентах этих полей нет.
   position?: DesktopOverlayPosition | null;
   editing?: boolean;
+  // Появилось в клиенте 1.0.12: размер шрифта и цвет имён в оверлее.
+  fontSize?: number;
+  color?: string;
 }
 
 export interface DesktopScreenSource {

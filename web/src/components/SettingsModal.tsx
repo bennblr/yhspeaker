@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Bell,
   Check,
   ChevronDown,
   Headphones,
@@ -46,6 +47,7 @@ import {
 } from '../lib/micGate';
 import { useCan } from '../lib/roles';
 import { desktop, type DesktopOverlayAnchor, type DesktopOverlayConfig } from '../lib/desktop';
+import { disablePush, enablePush, getPushStatus, type PushStatus } from '../lib/push';
 import {
   currentServerUrl,
   forgetServer,
@@ -338,6 +340,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [serverInput, setServerInput] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
   const testStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const testGateRef = useRef<AudioWorkletNode | null>(null);
@@ -347,6 +351,51 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const monitorRef = useRef<HTMLAudioElement>(null);
   const inputDevices = devices.filter((device) => device.kind === 'audioinput');
   const outputDevices = devices.filter((device) => device.kind === 'audiooutput');
+
+  useEffect(() => {
+    if (!open || desktop) return undefined;
+    let cancelled = false;
+    setPushStatus(null);
+    void getPushStatus()
+      .then((status) => {
+        if (!cancelled) setPushStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPushStatus({
+            kind: 'unsupported',
+            enabled: false,
+            hint: 'Не удалось проверить поддержку уведомлений в этом браузере.',
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const togglePushNotifications = async (value: boolean) => {
+    if (!token || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const next = value ? await enablePush(token) : await disablePush(token);
+      setPushStatus(next);
+      toast(
+        value ? 'ok' : 'info',
+        value ? 'Уведомления о личных сообщениях включены' : 'Уведомления отключены',
+      );
+    } catch (error) {
+      toast(
+        'error',
+        error instanceof Error ? error.message : 'Не удалось настроить уведомления',
+      );
+      await getPushStatus()
+        .then(setPushStatus)
+        .catch(() => undefined);
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -1152,6 +1201,24 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </Section>
 
+        {!desktop && (
+          <Section icon={Bell} title="Уведомления">
+            {!pushStatus ? (
+              <p className="text-[11px] text-muted">Проверяем поддержку уведомлений…</p>
+            ) : pushStatus.kind === 'ready' ? (
+              <Toggle
+                checked={pushStatus.enabled}
+                disabled={pushBusy}
+                onChange={(value) => void togglePushNotifications(value)}
+                title="Уведомления о личных сообщениях"
+                description="Когда приходит сообщение в личный чат, телефон показывает уведомление — даже если приложение закрыто. На iPhone работает только в приложении с экрана «Домой»."
+              />
+            ) : (
+              <p className="text-[11px] leading-relaxed text-muted">{pushStatus.hint}</p>
+            )}
+          </Section>
+        )}
+
         {overlayConfigSupported && overlayConfig && (
           <Section icon={Monitor} title="Оверлей канала">
             <div className="space-y-4">
@@ -1239,6 +1306,70 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   </div>
                 )}
               </div>
+              {overlayConfig.fontSize !== undefined && (
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label
+                      className="text-[11px] font-medium text-slate-300"
+                      htmlFor="overlay-font-size"
+                    >
+                      Размер шрифта
+                    </label>
+                    <span className="text-[11px] font-semibold text-slate-200">
+                      {overlayConfig.fontSize} px
+                    </span>
+                  </div>
+                  <input
+                    id="overlay-font-size"
+                    type="range"
+                    min={10}
+                    max={24}
+                    step={1}
+                    value={overlayConfig.fontSize}
+                    onChange={(event) =>
+                      void saveOverlayConfig({ fontSize: Number(event.target.value) })
+                    }
+                    className="mt-2 w-full"
+                  />
+                  <p className="mt-1 text-[10px] leading-relaxed text-muted">
+                    Крупнее шрифт — выше строки и шире оверлей, чтобы имена не обрезались.
+                  </p>
+                </div>
+              )}
+              {overlayConfig.color !== undefined && (
+                <div>
+                  <label
+                    className="text-[11px] font-medium text-slate-300"
+                    htmlFor="overlay-color"
+                  >
+                    Цвет текста
+                  </label>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      id="overlay-color"
+                      type="color"
+                      value={overlayConfig.color}
+                      onChange={(event) =>
+                        void saveOverlayConfig({ color: event.target.value })
+                      }
+                      className="h-10 w-14 cursor-pointer rounded-lg border border-line bg-panel p-1"
+                    />
+                    <span className="rounded-md border border-line bg-panel px-2 py-1 font-mono text-[11px] uppercase text-slate-300">
+                      {overlayConfig.color}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost h-8 px-3 text-xs"
+                      onClick={() => void saveOverlayConfig({ color: '#dfe5f2' })}
+                    >
+                      Сбросить
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-muted">
+                    Цвет имён участников. Зелёная точка по-прежнему показывает, кто говорит.
+                  </p>
+                </div>
+              )}
             </div>
           </Section>
         )}

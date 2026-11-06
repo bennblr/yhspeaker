@@ -181,6 +181,15 @@ export interface DirectMessage {
 export interface DmConversation {
   peer: DmParticipant;
   last: DirectMessage;
+  // Количество сохранённых сообщений в переписке.
+  count?: number;
+}
+
+export interface DmCandidate extends DmParticipant {
+  online: boolean;
+  isGuest: boolean;
+  roleIds: string[];
+  deviceName?: string;
 }
 
 export interface PublicServerConfig {
@@ -204,6 +213,8 @@ export interface InitState {
   roles: Role[];
   routerRtpCapabilities: unknown;
   config: ClientConfig;
+  // Количество сохранённых сообщений по каналам: сервер хранит только хвост истории.
+  messageCounts?: Record<string, number>;
 }
 
 export interface TransportParams {
@@ -397,6 +408,10 @@ export interface DmHistoryResult extends AckResult {
   messages?: DirectMessage[];
 }
 
+export interface DmParticipantsResult extends AckResult {
+  participants?: DmCandidate[];
+}
+
 export interface AuthorizeGuestResult extends AckResult {
   username?: string;
   password?: string;
@@ -436,6 +451,7 @@ export interface ClientToServerEvents {
     ack?: (res: AckResult) => void,
   ) => void;
   'dm:list': (ack?: (res: DmListResult) => void) => void;
+  'dm:participants': (ack?: (res: DmParticipantsResult) => void) => void;
   'dm:history': (
     payload: { userId: string },
     ack?: (res: DmHistoryResult) => void,

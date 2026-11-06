@@ -38,6 +38,16 @@ export interface StoredChannel {
   createdAt: number;
 }
 
+// Подписка браузера на Web Push. Endpoint уникален для установленного PWA
+// и меняется при переустановке, поэтому храним несколько подписок на аккаунт.
+export interface StoredPushSubscription {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  device?: string;
+  createdAt: number;
+}
+
 interface StoreData {
   version: 1;
   guestInviteCode: string;
@@ -49,6 +59,7 @@ interface StoreData {
   messages: Record<string, ChatMessage[]>;
   // Личные сообщения: ключ — пара идентификаторов аккаунтов в стабильном порядке.
   directMessages: Record<string, DirectMessage[]>;
+  pushSubscriptions: Record<string, StoredPushSubscription[]>;
 }
 
 const MESSAGES_PER_CHANNEL = 200;
@@ -69,6 +80,7 @@ function emptyData(guestInviteCode: string, guestInviteRequired: boolean): Store
     roles: [],
     messages: {},
     directMessages: {},
+    pushSubscriptions: {},
   };
 }
 
@@ -122,6 +134,7 @@ export class Store {
     this.data.roles ??= [];
     this.data.messages ??= {};
     this.data.directMessages ??= {};
+    this.data.pushSubscriptions ??= {};
     if (typeof this.data.guestInviteRequired !== 'boolean') {
       this.data.guestInviteRequired = envInviteRequired;
     }
@@ -314,6 +327,7 @@ export class Store {
       const [a, b] = key.split('|');
       if (a === id || b === id) delete this.data.directMessages[key];
     }
+    delete this.data.pushSubscriptions[id];
     this.saveNow();
     return true;
   }
@@ -547,6 +561,10 @@ export class Store {
     return list.slice(-Math.max(1, Math.min(limit, MESSAGES_PER_CHANNEL)));
   }
 
+  messageCount(channelId: string): number {
+    return this.data.messages[channelId]?.length ?? 0;
+  }
+
   addMessage(message: ChatMessage): void {
     const list = (this.data.messages[message.channelId] ??= []);
     list.push(message);
@@ -592,8 +610,58 @@ export class Store {
       result.push({
         peer: last.from.id === userId ? last.to : last.from,
         last,
+        count: list.length,
       });
     }
     return result.sort((a, b) => b.last.ts - a.last.ts);
+  }
+
+  // --- push subscriptions ---
+
+  pushSubscriptions(userId: string): StoredPushSubscription[] {
+    return this.data.pushSubscriptions[userId] ?? [];
+  }
+
+  savePushSubscription(
+    userId: string,
+    input: { endpoint: string; p256dh: string; auth: string; device?: string },
+  ): void {
+    // Один и тот же браузер может войти в другой аккаунт. Снимаем endpoint
+    // с прежних аккаунтов, иначе уведомления уходили бы не тому.
+    for (const [ownerId, list] of Object.entries(this.data.pushSubscriptions)) {
+      if (ownerId === userId) continue;
+      const next = list.filter((item) => item.endpoint !== input.endpoint);
+      if (next.length === list.length) continue;
+      if (next.length) this.data.pushSubscriptions[ownerId] = next;
+      else delete this.data.pushSubscriptions[ownerId];
+    }
+
+    const list = (this.data.pushSubscriptions[userId] ??= []);
+    const record: StoredPushSubscription = {
+      endpoint: input.endpoint,
+      p256dh: input.p256dh,
+      auth: input.auth,
+      device: input.device,
+      createdAt: Date.now(),
+    };
+    const index = list.findIndex((item) => item.endpoint === input.endpoint);
+    if (index === -1) {
+      list.push(record);
+      // У одного аккаунта редко больше трёх устройств; старые подписки
+      // выбрасываем, чтобы store.json не рос бесконечно.
+      if (list.length > 10) list.splice(0, list.length - 10);
+    } else {
+      list[index] = record;
+    }
+    this.saveSoon();
+  }
+
+  removePushSubscription(userId: string, endpoint: string): void {
+    const list = this.data.pushSubscriptions[userId];
+    if (!list) return;
+    const next = list.filter((item) => item.endpoint !== endpoint);
+    if (next.length === list.length) return;
+    this.data.pushSubscriptions[userId] = next;
+    this.saveSoon();
   }
 }

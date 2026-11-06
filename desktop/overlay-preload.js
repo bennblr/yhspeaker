@@ -13,5 +13,10 @@ contextBridge.exposeInMainWorld('overlay', {
     ipcRenderer.on('overlay:edit', listener);
     return () => ipcRenderer.removeListener('overlay:edit', listener);
   },
+  onStyle: (callback) => {
+    const listener = (_event, style) => callback(style ?? {});
+    ipcRenderer.on('overlay:style', listener);
+    return () => ipcRenderer.removeListener('overlay:style', listener);
+  },
   endEdit: () => ipcRenderer.send('overlay:end-edit'),
 });

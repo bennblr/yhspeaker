@@ -59,6 +59,26 @@ export const api = {
       { method: 'PATCH', body: JSON.stringify({ displayName }) },
       token,
     ),
+  pushKey: (token: string) => request<{ key: string | null }>('/api/push/key', {}, token),
+  pushSubscribe: (
+    token: string,
+    body: {
+      endpoint: string;
+      keys: { p256dh: string; auth: string };
+      device?: string;
+    },
+  ) =>
+    request<{ ok: boolean }>(
+      '/api/push/subscribe',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+  pushUnsubscribe: (token: string, endpoint: string) =>
+    request<{ ok: boolean }>(
+      '/api/push/unsubscribe',
+      { method: 'POST', body: JSON.stringify({ endpoint }) },
+      token,
+    ),
   adminUsers: (token: string) => request<{ users: AdminUser[] }>('/api/admin/users', {}, token),
   adminStats: (token: string, days: number) =>
     request<{ stats: OnlineStatsSummary; online: number }>(
