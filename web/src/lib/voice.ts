@@ -3,6 +3,7 @@ import type { ConsumerParams, TransportParams } from '@tsds/shared';
 import type { AppSocket } from './socket';
 import { useApp } from './store';
 import { DEFAULT_SETTINGS, MAX_USER_VOLUME, type MicSettings } from './settings';
+import { playSound } from './sounds';
 import {
   applyMicGate,
   applyRemoteLevel,
@@ -57,6 +58,7 @@ export class VoiceEngine {
   private recvTransport: MT.Transport | null = null;
   private micProducer: MT.Producer | null = null;
   private screenProducer: MT.Producer | null = null;
+  private screenAudioProducer: MT.Producer | null = null;
   private micStream: MediaStream | null = null;
   private rawMic: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
@@ -237,7 +239,12 @@ export class VoiceEngine {
       });
 
       sendTransport.on('connectionstatechange', (state) => {
-        if (state === 'failed') toast('error', 'Соединение с голосовым сервером потеряно');
+        if (state !== 'failed') return;
+        playSound('connectionLost');
+        toast('error', 'Соединение с голосовым сервером потеряно');
+      });
+      recvTransport.on('connectionstatechange', (state) => {
+        if (state === 'failed') playSound('connectionLost');
       });
 
       this.sendTransport = sendTransport;
@@ -413,7 +420,9 @@ export class VoiceEngine {
   toggleMicByKey(): void {
     if (!this.currentChannelId) return;
     if (!this.wantMic || !this.micProducer) {
-      void this.enableMic();
+      void this.enableMic().then((ok) => {
+        if (ok) this.setMuted(false);
+      });
       return;
     }
     this.setMuted(!this.muted);
@@ -480,7 +489,13 @@ export class VoiceEngine {
 
   async enableMic(): Promise<boolean> {
     if (!this.currentChannelId) return false;
-    if (this.micProducer) return true;
+    if (this.micProducer) {
+      // Микрофон уже создан — просто возвращаем ему передачу.
+      this.wantMic = true;
+      patchVoice({ micReady: true });
+      this.applyMicGate();
+      return true;
+    }
     try {
       const settings = this.mySettings();
       await this.prepareMic(settings);
@@ -790,9 +805,11 @@ export class VoiceEngine {
     }
     if (this.screenProducer) return;
     try {
+      // Звук берём вместе с экраном: браузер отдаёт звук вкладки, клиент для
+      // Windows — системный звук (loopback). Если звука нет, видео всё равно идёт.
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 24 },
-        audio: false,
+        audio: true,
       });
       const track = stream.getVideoTracks()[0];
       if (!track) throw new Error('no video track');
@@ -806,6 +823,26 @@ export class VoiceEngine {
       this.screenProducer = producer;
       this.localScreenStream = stream;
       useApp.getState().setLocalScreen(stream);
+
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        try {
+          this.screenAudioProducer = await this.sendTransport.produce({
+            track: audioTrack,
+            encodings: [{ maxBitrate: 96_000 }],
+            codecOptions: { opusStereo: true, opusDtx: false },
+            appData: { source: 'screen' },
+          });
+          this.screenAudioProducer.on('transportclose', () => {
+            this.screenAudioProducer = null;
+          });
+        } catch (audioError) {
+          // Сервер мог не принять аудиодорожку — показ экрана без звука.
+          console.warn('[voice] screen audio produce failed', audioError);
+          audioTrack.stop();
+          this.screenAudioProducer = null;
+        }
+      }
 
       track.onended = () => void this.stopScreenShare();
       producer.on('transportclose', () => {
@@ -822,29 +859,37 @@ export class VoiceEngine {
   }
 
   async stopScreenShare(): Promise<void> {
-    if (!this.screenProducer) {
+    if (!this.screenProducer && !this.screenAudioProducer) {
       this.localScreenStream?.getTracks().forEach((track) => track.stop());
       this.localScreenStream = null;
       useApp.getState().setLocalScreen(null);
       return;
     }
-    const producerId = this.screenProducer.id;
+    const producerIds = [this.screenProducer?.id, this.screenAudioProducer?.id].filter(
+      (id): id is string => Boolean(id),
+    );
     try {
-      this.screenProducer.close();
+      this.screenProducer?.close();
+      this.screenAudioProducer?.close();
     } catch {
       /* closed */
     }
     this.screenProducer = null;
+    this.screenAudioProducer = null;
     this.localScreenStream?.getTracks().forEach((track) => track.stop());
     this.localScreenStream = null;
     useApp.getState().setLocalScreen(null);
-    this.socket?.emit('voice:closeProducer', { producerId });
+    for (const producerId of producerIds) {
+      this.socket?.emit('voice:closeProducer', { producerId });
+    }
   }
 
   leave(): void {
+    const wasInChannel = Boolean(this.currentChannelId);
     this.generation += 1;
     this.socket?.emit('voice:leave');
     this.cleanupCall(true);
+    if (wasInChannel) playSound('channelLeave');
     patchVoice({
       channelId: null,
       connecting: false,
@@ -889,6 +934,14 @@ export class VoiceEngine {
         /* closed */
       }
       this.screenProducer = null;
+    }
+    if (this.screenAudioProducer) {
+      try {
+        this.screenAudioProducer.close();
+      } catch {
+        /* closed */
+      }
+      this.screenAudioProducer = null;
     }
     for (const entry of [...this.consumers.values()]) {
       this.removeConsumer(entry.consumer.id);

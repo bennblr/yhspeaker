@@ -1,6 +1,6 @@
 {
   "name": "@tsds/desktop",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "private": true,
   "description": "LA2Speak desktop client for Windows",
   "author": "LA2Speak",

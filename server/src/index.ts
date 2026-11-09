@@ -937,6 +937,9 @@ io.on('connection', async (socket: AppSocket) => {
   const device = socket.data.device ?? guessDevice(undefined);
 
   const online = sessions.register(socket, account, device);
+  // Продлеваем сессию при каждом подключении, чтобы активный пользователь
+  // не вводил пароль заново по истечении срока токена.
+  socket.emit('session:token', { token: auth.refreshToken(account) });
   const visibleChannels = channelsFor(account);
   socket.emit('state:init', {
     me: online,

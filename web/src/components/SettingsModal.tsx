@@ -1374,6 +1374,29 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </Section>
         )}
 
+        <Section icon={Volume2} title="Звуки">
+          <div className="space-y-4">
+            <Toggle
+              checked={settings.soundConnectionLost}
+              onChange={(value) => updateSettings({ soundConnectionLost: value })}
+              title="Потеря связи"
+              description="Сигнал, когда пропадает соединение с сервером или голосовым каналом."
+            />
+            <Toggle
+              checked={settings.soundChannelJoin}
+              onChange={(value) => updateSettings({ soundChannelJoin: value })}
+              title="Вход в голосовой канал"
+              description="Короткий сигнал, когда вы или кто-то ещё заходит в ваш голосовой канал."
+            />
+            <Toggle
+              checked={settings.soundChannelLeave}
+              onChange={(value) => updateSettings({ soundChannelLeave: value })}
+              title="Выход из голосового канала"
+              description="Короткий сигнал, когда участник выходит из канала или отключается."
+            />
+          </div>
+        </Section>
+
         {canBroadcast && (
           <Section icon={Radio} title="Горячие клавиши вещания">
             <div className="space-y-3">

@@ -102,10 +102,17 @@ export async function toggleMic(): Promise<void> {
     return;
   }
   if (!state.voice.micReady) {
-    await voice.enableMic();
+    const ok = await voice.enableMic();
+    if (!ok) return;
+    voice.setMuted(false);
+  }
+  // В режиме push-to-talk кнопку нельзя удерживать: клик фиксирует передачу,
+  // повторный клик выключает. Иначе кнопка выглядела бы нерабочей.
+  if (useApp.getState().settings.mode === 'ptt') {
+    voice.setPtt(!useApp.getState().voice.pttActive);
     return;
   }
-  voice.setMuted(!state.voice.muted);
+  voice.setMuted(!useApp.getState().voice.muted);
 }
 
 export interface BroadcastState {

@@ -37,16 +37,39 @@ function normalizeServerName(value: string): string {
 }
 
 const isProduction = process.env.NODE_ENV === 'production';
+const dataDir = path.resolve(rootDir, envString('DATA_DIR', 'data'));
 
+// Без постоянного секрета все выданные токены становятся недействительны
+// после перезапуска сервера, и приложение просит логин при каждом входе.
+// Поэтому сгенерированный секрет сохраняем рядом с данными (0600).
 function resolveJwtSecret(): string {
   const secret = process.env.JWT_SECRET?.trim();
   if (secret && secret.length >= 16) return secret;
-  if (isProduction) {
-    throw new Error('JWT_SECRET не задан или слишком короткий (минимум 16 символов). Укажите его в .env');
+
+  const secretFile = path.join(dataDir, 'jwt-secret');
+  try {
+    const stored = fs.readFileSync(secretFile, 'utf8').trim();
+    if (stored.length >= 16) return stored;
+  } catch {
+    /* файла ещё нет */
   }
+
   const generated = crypto.randomBytes(32).toString('hex');
-  console.warn('[config] JWT_SECRET не задан — сгенерирован временный. Сессии станут недействительны после перезапуска.');
-  return generated;
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(secretFile, generated, { encoding: 'utf8', mode: 0o600 });
+    console.warn('[config] JWT_SECRET не задан — создан постоянный секрет в DATA_DIR, сессии переживут перезапуск.');
+    return generated;
+  } catch (error) {
+    if (isProduction) {
+      throw new Error(
+        'JWT_SECRET не задан, а сохранить его в DATA_DIR не удалось. Укажите JWT_SECRET в .env',
+        { cause: error },
+      );
+    }
+    console.warn('[config] JWT_SECRET не задан — сгенерирован временный. Сессии станут недействительны после перезапуска.');
+    return generated;
+  }
 }
 
 export interface AppConfig {
@@ -78,7 +101,7 @@ export const config: AppConfig = {
   port: envInt('PORT', 4000),
   host: envString('HOST', '0.0.0.0'),
   serverName: normalizeServerName(envString('SERVER_NAME', 'LA2Speak')),
-  dataDir: path.resolve(rootDir, envString('DATA_DIR', 'data')),
+  dataDir,
   webDistDir: path.join(rootDir, 'web', 'dist'),
   desktopInstallerDir: path.resolve(
     rootDir,

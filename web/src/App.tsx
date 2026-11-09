@@ -45,7 +45,8 @@ import {
 } from './lib/settings';
 import { cn, isTypingTarget, serverLabel } from './lib/utils';
 import { currentServerUrl, rememberServer } from './lib/servers';
-import { hasPermission, type BroadcastGroup } from '@tsds/shared';
+import { hasPermission, type BroadcastGroup, type OnlineUser } from '@tsds/shared';
+import { playSound, unlockSounds } from './lib/sounds';
 
 function Splash({ offline }: { offline: boolean }) {
   return (
@@ -158,6 +159,9 @@ export function App() {
   const token = useApp((state) => state.token);
   const tokenRef = useRef(token);
   const pendingDmRef = useRef<string | null>(null);
+  // Участники канала до обновления списка — чтобы отличить вход и выход.
+  const prevUsersRef = useRef<OnlineUser[]>([]);
+  const sessionEndedRef = useRef(false);
   const me = useApp((state) => state.me);
   const connection = useApp((state) => state.connection);
   const channels = useApp((state) => state.channels);
@@ -233,16 +237,22 @@ export function App() {
     const socket = connectSocket(token, describeDevice());
     voice.attach(socket);
     useApp.getState().setConnection('connecting');
+    prevUsersRef.current = [];
+    sessionEndedRef.current = false;
 
     socket.on('connect', () => {
       useApp.getState().setConnection('online');
       void syncPushSubscription(token);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       useApp.getState().setConnection('offline');
       useApp.getState().clearChannelUnlocks();
       voice.abort();
+      // Выход из аккаунта и завершение сессии сервером — не потеря связи.
+      if (reason !== 'io client disconnect' && !sessionEndedRef.current) {
+        playSound('connectionLost');
+      }
     });
 
     socket.on('connect_error', (error) => {
@@ -271,6 +281,20 @@ export function App() {
     });
 
     socket.on('state:users', (users) => {
+      const channelId = useApp.getState().voice.channelId;
+      if (channelId) {
+        const before = new Set(
+          prevUsersRef.current
+            .filter((user) => user.channelId === channelId)
+            .map((user) => user.sessionId),
+        );
+        const after = new Set(
+          users.filter((user) => user.channelId === channelId).map((user) => user.sessionId),
+        );
+        if ([...after].some((id) => !before.has(id))) playSound('channelJoin');
+        else if ([...before].some((id) => !after.has(id))) playSound('channelLeave');
+      }
+      prevUsersRef.current = users;
       useApp.getState().applyUsers(users);
     });
 
@@ -315,7 +339,22 @@ export function App() {
     });
 
     socket.on('voice:activeSpeakers', (speakers) => {
-      useApp.getState().setSpeaking(speakers.map((speaker) => speaker.sessionId));
+      // Сервер считает уровни глобально; показываем речь только тех, кто
+      // находится в нашем голосовом канале.
+      const state = useApp.getState();
+      const channelId = state.voice.channelId;
+      if (!channelId) {
+        state.setSpeaking([]);
+        return;
+      }
+      const inChannel = new Set(
+        state.users
+          .filter((user) => user.channelId === channelId)
+          .map((user) => user.sessionId),
+      );
+      state.setSpeaking(
+        speakers.map((speaker) => speaker.sessionId).filter((id) => inChannel.has(id)),
+      );
     });
 
     socket.on('voice:kicked', ({ channelName, byName }) => {
@@ -337,6 +376,7 @@ export function App() {
     });
 
     socket.on('session:ended', ({ reason }) => {
+      sessionEndedRef.current = true;
       logout();
       toast('info', reason);
     });
@@ -344,6 +384,8 @@ export function App() {
     socket.on('session:token', ({ token: nextToken }) => {
       // Zustand-токен не трогаем: его смена пересоздала бы сокет и голосовую сессию.
       tokenRef.current = nextToken;
+      const auth = typeof socket.auth === 'object' && socket.auth ? socket.auth : {};
+      socket.auth = { ...auth, token: nextToken };
       localStorage.setItem('la2speak.token', nextToken);
     });
 
@@ -783,6 +825,7 @@ export function App() {
   useEffect(() => {
     const unlock = () => {
       voice.unlockAudio();
+      unlockSounds();
       window.removeEventListener('pointerdown', unlock);
     };
     window.addEventListener('pointerdown', unlock);

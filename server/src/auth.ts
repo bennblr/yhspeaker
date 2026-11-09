@@ -83,8 +83,14 @@ export class AuthService {
         displayName: account.displayName,
         role: account.role,
       },
-      account.isGuest ? '12h' : '7d',
+      account.isGuest ? '12h' : '30d',
     );
+  }
+
+  // Свежий токен при каждом подключении: пока человек заходит хотя бы раз
+  // в месяц, приложение не просит логин заново.
+  refreshToken(account: Account): string {
+    return this.issueToken(account);
   }
 
   async register(input: {

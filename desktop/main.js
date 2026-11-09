@@ -1209,7 +1209,13 @@ function configureSession() {
           sources.find((item) => item.id.startsWith(`screen:${screen.getPrimaryDisplay().id}:`)) ||
           sources.find((item) => item.id.startsWith('screen:')) ||
           sources[0];
-        callback(source ? { video: source } : {});
+        if (!source) {
+          callback({});
+          return;
+        }
+        // Системный звук Windows доступен только для захвата всего экрана.
+        const systemAudio = process.platform === 'win32' && source.id.startsWith('screen:');
+        callback(systemAudio ? { video: source, audio: 'loopback' } : { video: source });
       })
       .catch((error) => {
         console.error('[desktop] display media failed', error);

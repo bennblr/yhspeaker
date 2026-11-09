@@ -31,6 +31,10 @@ export interface MicSettings {
   // слушатели не слышат никого, кроме вещающего.
   priorityKeys: BroadcastKeys;
   priorityMode: BroadcastMode;
+  // Звуковые сигналы: потеря связи и переходы участников в голосовом канале.
+  soundConnectionLost: boolean;
+  soundChannelJoin: boolean;
+  soundChannelLeave: boolean;
 }
 
 // Кнопки мыши, которые можно назначить на микрофон. Средняя и две боковые:
@@ -285,6 +289,9 @@ export const DEFAULT_SETTINGS: MicSettings = {
   broadcastMode: 'toggle',
   priorityKeys: { all: '', groups: {} },
   priorityMode: 'ptt',
+  soundConnectionLost: true,
+  soundChannelJoin: true,
+  soundChannelLeave: true,
 };
 
 const STORAGE_KEY = 'la2speak.settings.v1';

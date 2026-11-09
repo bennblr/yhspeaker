@@ -291,17 +291,22 @@ export class VoiceManager {
     if (!peer || !online?.channelId || peer.closed || !peer.sendTransport) {
       return { error: 'Вы не в голосовом канале' };
     }
-    if (source === 'screen' && kind !== 'video') {
-      return { error: 'Демонстрация экрана должна быть видеопотоком' };
-    }
     if (source === 'mic' && kind !== 'audio') {
       return { error: 'Микрофон должен быть аудиопотоком' };
     }
+    if (source === 'screen' && kind !== 'video' && kind !== 'audio') {
+      return { error: 'Демонстрация экрана должна быть видео- или аудиопотоком' };
+    }
 
     try {
-      // один микрофон и одна демонстрация на устройство
+      // один микрофон и одна демонстрация на устройство; звук демонстрации
+      // живёт вместе с её видео и не должен вытеснять видео
       for (const [producerId, meta] of this.producerMeta) {
-        if (meta.sessionId === sessionId && meta.source === source) {
+        if (
+          meta.sessionId === sessionId &&
+          meta.source === source &&
+          meta.kind === kind
+        ) {
           await this.removeProducer(producerId);
         }
       }
@@ -326,7 +331,7 @@ export class VoiceManager {
       if (source === 'mic') {
         await this.observer.addProducer({ producerId: producer.id }).catch(() => undefined);
         if (online.serverMuted) await producer.pause().catch(() => undefined);
-      } else {
+      } else if (kind === 'video') {
         this.sessions.update(sessionId, { screenSharing: true });
       }
 
@@ -374,7 +379,7 @@ export class VoiceManager {
         /* already closed */
       }
     }
-    if (meta?.source === 'screen') {
+    if (meta?.source === 'screen' && meta.kind === 'video') {
       this.sessions.update(meta.sessionId, { screenSharing: false });
     }
   }
