@@ -243,6 +243,7 @@ export class VoiceManager {
         send: transportParams(sendTransport),
         recv: transportParams(recvTransport),
       });
+      this.broadcastAudiences();
       return { ok: true };
     } catch (error) {
       console.error('[voice] failed to create transports', error);
@@ -558,6 +559,27 @@ export class VoiceManager {
   private reconcileAll(): void {
     for (const peer of this.peers.values()) {
       this.scheduleSync(peer);
+    }
+    this.broadcastAudiences();
+  }
+
+  // Список сессий, чьё вещание слышно каждому участнику. Клиентам он нужен
+  // для оверлея: состав групп обычным участникам не раскрывается.
+  private broadcastAudiences(): void {
+    const users = this.sessions.list();
+    for (const listener of users) {
+      const socket = this.sessions.getSocket(listener.sessionId);
+      if (!socket) continue;
+      const sessions = users
+        .filter(
+          (speaker) =>
+            speaker.sessionId !== listener.sessionId &&
+            speaker.id !== listener.id &&
+            speaker.broadcasting &&
+            this.isBroadcastAudience(listener.id, speaker),
+        )
+        .map((speaker) => speaker.sessionId);
+      socket.emit('voice:audience', { sessions });
     }
   }
 

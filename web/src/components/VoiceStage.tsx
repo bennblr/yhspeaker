@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   UserX,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -31,6 +32,8 @@ import {
   joinVoice,
   openScreenViewer,
   stopBroadcast,
+  toggleBroadcastAll,
+  toggleBroadcastGroup,
   toggleScreenShare,
 } from '../lib/actions';
 
@@ -262,6 +265,7 @@ export function VoiceStage({ channel }: { channel: Channel }) {
   const voice = useApp((state) => state.voice);
   const screens = useApp((state) => state.voice.remoteScreens);
   const roles = useApp((state) => state.roles);
+  const broadcastGroups = useApp((state) => state.broadcastGroups);
 
   const canModerate = hasPermission(me, roles, 'moderate');
   const canBroadcast = hasPermission(me, roles, 'broadcast');
@@ -388,10 +392,42 @@ export function VoiceStage({ channel }: { channel: Channel }) {
               {voice.localScreen ? 'Остановить показ' : 'Показать экран'}
             </button>
             {canBroadcast && (
-              <span className="flex items-center gap-1.5 text-[11px] text-muted">
-                <Radio className="h-3.5 w-3.5" />
-                вещание включается клавишами из настроек
-              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-pressed={Boolean(me?.broadcastAll)}
+                  className={cn(
+                    'btn-ghost h-8 px-3 text-xs',
+                    me?.broadcastAll && 'border-ok/40 bg-ok/10 text-ok',
+                  )}
+                  onClick={() => toggleBroadcastAll(Boolean(me?.broadcastPriority))}
+                  title="Вещать во все голосовые каналы"
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  {me?.broadcastAll ? 'Эфир: все каналы' : 'Во все каналы'}
+                </button>
+                {broadcastGroups.map((group) => {
+                  const active = Boolean(me?.broadcastGroupIds.includes(group.id));
+                  return (
+                    <button
+                      key={group.id}
+                      type="button"
+                      aria-pressed={active}
+                      className={cn(
+                        'btn-ghost h-8 px-3 text-xs',
+                        active && 'border-ok/40 bg-ok/10 text-ok',
+                      )}
+                      onClick={() =>
+                        toggleBroadcastGroup(group.id, Boolean(me?.broadcastPriority))
+                      }
+                      title={`Вещать только группе «${group.name}»`}
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                      {group.name}
+                    </button>
+                  );
+                })}
+              </div>
             )}
             <button className="btn-ghost ml-auto h-8 px-3 text-xs" onClick={leaveVoice}>
               <LogOut className="h-3.5 w-3.5" />

@@ -71,6 +71,11 @@ export interface AppState {
   dmPeer: DmParticipant | null;
   dmUnread: Record<string, number>;
   speaking: string[];
+  // Сырой список говорящих всего сервера: нужен оверлею, чтобы подсвечивать
+  // вещающих из другого канала. Основной интерфейс использует отфильтрованный.
+  speakingAll: string[];
+  // Сессии вещателей, которых слышно именно этому участнику (от сервера).
+  audibleBroadcasters: string[];
   localMuted: string[];
   // Индивидуальная громкость собеседников: множитель 0–2 к общему уровню.
   userVolumes: Record<string, number>;
@@ -100,6 +105,8 @@ export interface AppState {
   setDmPeer: (peer: DmParticipant | null) => void;
   addDmMessage: (message: DirectMessage) => void;
   setSpeaking: (userIds: string[]) => void;
+  setSpeakingAll: (userIds: string[]) => void;
+  setAudibleBroadcasters: (userIds: string[]) => void;
   toggleLocalMute: (userId: string) => void;
   setUserVolume: (userId: string, volume: number) => void;
   setSettings: (patch: Partial<MicSettings>) => void;
@@ -191,6 +198,8 @@ export const useApp = create<AppState>((set, get) => ({
   dmPeer: null,
   dmUnread: {},
   speaking: [],
+  speakingAll: [],
+  audibleBroadcasters: [],
   localMuted: loadLocalMuted(),
   userVolumes: loadUserVolumes(),
   settings: loadSettings(),
@@ -422,6 +431,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSpeaking: (userIds) => set({ speaking: userIds }),
+  setSpeakingAll: (userIds) => set({ speakingAll: userIds }),
+  setAudibleBroadcasters: (userIds) => set({ audibleBroadcasters: userIds }),
 
   toggleLocalMute: (userId) => {
     const state = get();
@@ -518,6 +529,8 @@ export const useApp = create<AppState>((set, get) => ({
       dmPeer: null,
       dmUnread: {},
       speaking: [],
+      speakingAll: [],
+      audibleBroadcasters: [],
       voice: {
         channelId: null,
         connecting: false,

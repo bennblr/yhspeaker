@@ -432,6 +432,7 @@ export interface ServerToClientEvents {
   'voice:newConsumer': (consumer: ConsumerParams) => void;
   'voice:consumerClosed': (payload: { consumerId: string }) => void;
   'voice:activeSpeakers': (speakers: SpeakerInfo[]) => void;
+  'voice:audience': (payload: { sessions: string[] }) => void;
   'voice:kicked': (payload: { channelName: string; byName: string }) => void;
   'voice:moved': (payload: { channelId: string; channelName: string; byName: string }) => void;
   'voice:joinFailed': (payload: { message: string }) => void;

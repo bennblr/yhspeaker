@@ -340,8 +340,11 @@ export function App() {
 
     socket.on('voice:activeSpeakers', (speakers) => {
       // Сервер считает уровни глобально; показываем речь только тех, кто
-      // находится в нашем голосовом канале.
+      // находится в нашем голосовом канале. Сырой список нужен оверлею:
+      // он показывает и вещающих из другого канала.
       const state = useApp.getState();
+      const ids = speakers.map((speaker) => speaker.sessionId);
+      state.setSpeakingAll(ids);
       const channelId = state.voice.channelId;
       if (!channelId) {
         state.setSpeaking([]);
@@ -352,9 +355,17 @@ export function App() {
           .filter((user) => user.channelId === channelId)
           .map((user) => user.sessionId),
       );
-      state.setSpeaking(
-        speakers.map((speaker) => speaker.sessionId).filter((id) => inChannel.has(id)),
-      );
+      state.setSpeaking(ids.filter((id) => inChannel.has(id)));
+    });
+
+    socket.on('voice:audience', ({ sessions }) => {
+      useApp
+        .getState()
+        .setAudibleBroadcasters(
+          Array.isArray(sessions)
+            ? sessions.filter((id): id is string => typeof id === 'string')
+            : [],
+        );
     });
 
     socket.on('voice:kicked', ({ channelName, byName }) => {
@@ -543,15 +554,12 @@ export function App() {
       const channelId = state.voice.channelId;
       if (!channelId) return null;
       const channel = state.channels.find((item) => item.id === channelId);
-      const speaking = new Set(state.speaking);
+      const speaking = new Set(state.speakingAll);
       const selfSessionId = state.me?.sessionId ?? '';
       const pttSpeaking = state.settings.mode === 'ptt' && state.voice.pttActive;
-      // Вещающих на весь сервер слышно в любом канале, поэтому они тоже в списке.
-      const broadcasters = new Set(
-        state.users
-          .filter((user) => user.channelId !== channelId && user.broadcasting && user.broadcastAll)
-          .map((user) => user.sessionId),
-      );
+      // Слышимые вещатели приходят с сервера: на весь сервер или на наши
+      // группы. Состав групп остальным участникам не раскрывается.
+      const broadcasters = new Set(state.audibleBroadcasters);
       const participants = state.users
         .filter((user) => user.channelId === channelId || broadcasters.has(user.sessionId))
         .map((user) => ({
@@ -582,6 +590,8 @@ export function App() {
       if (
         state.users === prev.users &&
         state.speaking === prev.speaking &&
+        state.speakingAll === prev.speakingAll &&
+        state.audibleBroadcasters === prev.audibleBroadcasters &&
         state.voice === prev.voice &&
         state.channels === prev.channels &&
         state.me === prev.me &&
