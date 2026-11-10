@@ -33,6 +33,11 @@ import {
   toggleBroadcastGroup,
 } from './lib/actions';
 import { listenPushMessages, pushNotificationTarget, syncPushSubscription } from './lib/push';
+import {
+  mobile,
+  syncFcmToken,
+  syncStoredFcmToken,
+} from './lib/mobile';
 import { desktop, type BroadcastBinding } from './lib/desktop';
 import {
   isGlobalAccelerator,
@@ -243,6 +248,7 @@ export function App() {
     socket.on('connect', () => {
       useApp.getState().setConnection('online');
       void syncPushSubscription(token);
+      void syncStoredFcmToken(token);
     });
 
     socket.on('disconnect', (reason) => {
@@ -418,6 +424,42 @@ export function App() {
     return listenPushMessages((message) => {
       if (message.type === 'dm:open') openDmByUserId(message.userId);
     });
+  }, [token]);
+
+  // Android-приложение присылает токен FCM после входа и события службы:
+  // кнопки в уведомлении голосового канала и переход к переписке.
+  useEffect(() => {
+    if (!mobile) return undefined;
+    return mobile.onEvent((event) => {
+      if (event.type === 'mic-toggle') {
+        voice.toggleMicByKey();
+        return;
+      }
+      if (event.type === 'voice-leave') {
+        voice.leave();
+        return;
+      }
+      if (event.type === 'open-dm') {
+        openDmByUserId(event.userId);
+        return;
+      }
+      if (event.type === 'push-token') {
+        const current = tokenRef.current;
+        if (current) void syncFcmToken(current, event.token);
+        return;
+      }
+      if (event.type === 'resume' || (event.type === 'network' && event.online)) {
+        // Android мог выгрузить сокет из памяти, пока экран был заблокирован.
+        getSocket()?.connect();
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!mobile || !token) return;
+    mobile.ready();
+    mobile.requestNotifications();
+    void syncStoredFcmToken(token);
   }, [token]);
 
   useEffect(() => {
@@ -610,7 +652,6 @@ export function App() {
   const voiceChannelName = channels.find((item) => item.id === voiceChannelId)?.name ?? '';
 
   useEffect(() => {
-    if (!desktop) return;
     const serverMuted = Boolean(me?.serverMuted);
     const micOn =
       Boolean(voiceChannelId) &&
@@ -619,13 +660,17 @@ export function App() {
       !voiceState.deafened &&
       !serverMuted &&
       (settings.mode !== 'ptt' || voiceState.pttActive);
-    desktop.setMicState({
+    const state = {
       inCall: Boolean(voiceChannelId),
       on: micOn,
       muted: voiceState.muted || voiceState.deafened || serverMuted,
       broadcasting: Boolean(me?.broadcasting),
       channelName: voiceChannelName,
-    });
+    };
+    desktop?.setMicState(state);
+    // Android держит микрофон и звук в foreground-службе, пока идёт звонок:
+    // экран можно заблокировать, сессия не оборвётся.
+    mobile?.setCallState(state);
   }, [
     voiceChannelId,
     voiceChannelName,
@@ -806,7 +851,8 @@ export function App() {
       }
     };
     // В браузере при потере фокуса клавишу отпустить некому — снимаем эфир.
-    // В приложении для Windows глобальный хук всегда пришлёт отпускание.
+    // В приложении для Windows глобальный хук всегда пришлёт отпускание, а в
+    // Android-приложении экран может погаснуть прямо во время вещания.
     const releaseAll = () => releaseBroadcastHolds();
     const onVisibility = () => {
       if (document.hidden) releaseAll();
@@ -816,7 +862,7 @@ export function App() {
     window.addEventListener('pointerdown', pointerDown);
     window.addEventListener('pointerup', pointerUp);
     window.addEventListener('auxclick', auxClick);
-    if (!desktopHotkeys) {
+    if (!desktopHotkeys && !mobile) {
       window.addEventListener('blur', releaseAll);
       document.addEventListener('visibilitychange', onVisibility);
     }

@@ -59,7 +59,8 @@ export const api = {
       { method: 'PATCH', body: JSON.stringify({ displayName }) },
       token,
     ),
-  pushKey: (token: string) => request<{ key: string | null }>('/api/push/key', {}, token),
+  pushKey: (token: string) =>
+    request<{ key: string | null; fcm?: boolean }>('/api/push/key', {}, token),
   pushSubscribe: (
     token: string,
     body: {
@@ -77,6 +78,18 @@ export const api = {
     request<{ ok: boolean }>(
       '/api/push/unsubscribe',
       { method: 'POST', body: JSON.stringify({ endpoint }) },
+      token,
+    ),
+  pushFcm: (token: string, fcmToken: string, device?: string) =>
+    request<{ ok: boolean }>(
+      '/api/push/fcm',
+      { method: 'POST', body: JSON.stringify({ token: fcmToken, device }) },
+      token,
+    ),
+  pushFcmRemove: (token: string, fcmToken: string) =>
+    request<{ ok: boolean }>(
+      '/api/push/fcm/remove',
+      { method: 'POST', body: JSON.stringify({ token: fcmToken }) },
       token,
     ),
   adminUsers: (token: string) => request<{ users: AdminUser[] }>('/api/admin/users', {}, token),

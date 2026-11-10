@@ -4,6 +4,7 @@ import { voice } from './voice';
 import { desktop } from './desktop';
 import { openScreenSharePicker } from './screenPicker';
 import { forgetPushOnLogout } from './push';
+import { forgetFcmOnLogout } from './mobile';
 import type { MicSettings } from './settings';
 import { hasPermission, type Channel, type DmCandidate, type OnlineUser } from '@tsds/shared';
 
@@ -17,6 +18,7 @@ export function loginWithToken(token: string): void {
 
 export function logout(): void {
   forgetPushOnLogout(useApp.getState().token);
+  forgetFcmOnLogout(useApp.getState().token);
   getSocket()?.disconnect();
   disconnectSocket();
   voice.reset();

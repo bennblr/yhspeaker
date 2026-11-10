@@ -40,6 +40,7 @@ import { SessionService } from './session.js';
 import { StatsRecorder } from './stats.js';
 import { Store } from './store.js';
 import { PushService } from './push.js';
+import { FcmService } from './fcm.js';
 import { VoiceManager } from './voice.js';
 import type { AppServer, AppSocket } from './types.js';
 
@@ -64,6 +65,7 @@ const sessions = new SessionService(io);
 const socketAccounts = new Map<string, Account>();
 const stats = new StatsRecorder(sessions, config.dataDir);
 const push = new PushService(store, config.dataDir);
+const fcm = new FcmService(store);
 
 const auth = new AuthService(store, config, (name) => {
   return (
@@ -217,6 +219,11 @@ const pushSubscribeSchema = z.object({
 
 const pushUnsubscribeSchema = z.object({
   endpoint: z.string().trim().min(10).max(2048),
+});
+
+const fcmTokenSchema = z.object({
+  token: z.string().trim().min(20).max(4096),
+  device: z.string().trim().max(40).optional(),
 });
 
 const channelNameSchema = z
@@ -556,7 +563,7 @@ app.get(
   '/api/push/key',
   wrap((req, res) => {
     accountFromRequest(req);
-    res.json({ key: push.available ? push.publicKey : null });
+    res.json({ key: push.available ? push.publicKey : null, fcm: fcm.available });
   }),
 );
 
@@ -585,6 +592,29 @@ app.post(
     const account = accountFromRequest(req);
     const body = parseBody(pushUnsubscribeSchema, req.body);
     push.unsubscribe(account.id, body.endpoint);
+    res.json({ ok: true });
+  }),
+);
+
+// Токен FCM присылает Android-приложение. В отличие от Web Push, он не
+// содержит endpoint и ключей — сервер сам собирает сообщение через Firebase.
+app.post(
+  '/api/push/fcm',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    if (!fcm.available) throw new HttpError(503, 'Уведомления недоступны на сервере');
+    const body = parseBody(fcmTokenSchema, req.body);
+    fcm.register(account.id, body.token, body.device);
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/push/fcm/remove',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    const body = parseBody(fcmTokenSchema, req.body);
+    fcm.unregister(account.id, body.token);
     res.json({ ok: true });
   }),
 );
@@ -1109,8 +1139,10 @@ io.on('connection', async (socket: AppSocket) => {
         target.emit('dm:message', message);
       }
       // Даже при закрытом приложении на телефоне уведомление придёт через
-      // сервис-воркер: сокет для этого не нужен.
+      // сервис-воркер: сокет для этого не нужен. Android-приложение получает
+      // то же сообщение через Firebase, включая заблокированный экран.
       void push.notifyDirectMessage(to.id, from, message.text, message.ts);
+      void fcm.notifyDirectMessage(to.id, from, message.text, message.ts);
       ack?.({ ok: true });
     } catch (error) {
       const message = error instanceof HttpError ? error.message : 'Не удалось отправить сообщение';

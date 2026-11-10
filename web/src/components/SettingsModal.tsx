@@ -15,6 +15,7 @@ import {
   Server,
   Shield,
   ShieldCheck,
+  Smartphone,
   UserRound,
   Users,
   Volume2,
@@ -48,6 +49,7 @@ import {
 import { useCan } from '../lib/roles';
 import { desktop, type DesktopOverlayAnchor, type DesktopOverlayConfig } from '../lib/desktop';
 import { disablePush, enablePush, getPushStatus, type PushStatus } from '../lib/push';
+import { mobile } from '../lib/mobile';
 import {
   currentServerUrl,
   forgetServer,
@@ -1201,7 +1203,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </Section>
 
-        {!desktop && (
+        {!desktop && !mobile && (
           <Section icon={Bell} title="Уведомления">
             {!pushStatus ? (
               <p className="text-[11px] text-muted">Проверяем поддержку уведомлений…</p>
@@ -1216,6 +1218,36 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             ) : (
               <p className="text-[11px] leading-relaxed text-muted">{pushStatus.hint}</p>
             )}
+          </Section>
+        )}
+
+        {mobile && (
+          <Section icon={Smartphone} title="Мобильное приложение">
+            <div className="space-y-3">
+              <p className="text-[11px] leading-relaxed text-muted">
+                Голосовая связь продолжается при заблокированном экране: приложение держит
+                микрофон и звук в фоновой службе. Чтобы система не выгружала его в простое,
+                разрешите работу в фоне без ограничений.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-ghost h-8 gap-1.5 px-3 text-xs"
+                  onClick={() => mobile.requestNotifications()}
+                >
+                  <Bell className="h-3.5 w-3.5" />
+                  Уведомления
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost h-8 gap-1.5 px-3 text-xs"
+                  onClick={() => mobile.requestBatteryOptimization()}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Работа в фоне
+                </button>
+              </div>
+            </div>
           </Section>
         )}
 

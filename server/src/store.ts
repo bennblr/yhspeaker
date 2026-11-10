@@ -48,6 +48,14 @@ export interface StoredPushSubscription {
   createdAt: number;
 }
 
+// Токен Firebase Cloud Messaging приложения для Android. В отличие от Web Push
+// у токена нет endpoint и ключей шифрования — сообщение собирает FCM.
+export interface StoredFcmToken {
+  token: string;
+  device?: string;
+  createdAt: number;
+}
+
 interface StoreData {
   version: 1;
   guestInviteCode: string;
@@ -60,6 +68,7 @@ interface StoreData {
   // Личные сообщения: ключ — пара идентификаторов аккаунтов в стабильном порядке.
   directMessages: Record<string, DirectMessage[]>;
   pushSubscriptions: Record<string, StoredPushSubscription[]>;
+  fcmTokens: Record<string, StoredFcmToken[]>;
 }
 
 const MESSAGES_PER_CHANNEL = 200;
@@ -81,6 +90,7 @@ function emptyData(guestInviteCode: string, guestInviteRequired: boolean): Store
     messages: {},
     directMessages: {},
     pushSubscriptions: {},
+    fcmTokens: {},
   };
 }
 
@@ -135,6 +145,7 @@ export class Store {
     this.data.messages ??= {};
     this.data.directMessages ??= {};
     this.data.pushSubscriptions ??= {};
+    this.data.fcmTokens ??= {};
     if (typeof this.data.guestInviteRequired !== 'boolean') {
       this.data.guestInviteRequired = envInviteRequired;
     }
@@ -328,6 +339,7 @@ export class Store {
       if (a === id || b === id) delete this.data.directMessages[key];
     }
     delete this.data.pushSubscriptions[id];
+    delete this.data.fcmTokens[id];
     this.saveNow();
     return true;
   }
@@ -662,6 +674,45 @@ export class Store {
     const next = list.filter((item) => item.endpoint !== endpoint);
     if (next.length === list.length) return;
     this.data.pushSubscriptions[userId] = next;
+    this.saveSoon();
+  }
+
+  // --- FCM tokens ---
+
+  fcmTokens(userId: string): StoredFcmToken[] {
+    return this.data.fcmTokens[userId] ?? [];
+  }
+
+  saveFcmToken(userId: string, token: string, device?: string): void {
+    // Телефон мог войти в другой аккаунт: токен принадлежит установке
+    // приложения, поэтому снимаем его с предыдущего владельца.
+    for (const [ownerId, list] of Object.entries(this.data.fcmTokens)) {
+      if (ownerId === userId) continue;
+      const next = list.filter((item) => item.token !== token);
+      if (next.length === list.length) continue;
+      if (next.length) this.data.fcmTokens[ownerId] = next;
+      else delete this.data.fcmTokens[ownerId];
+    }
+
+    const list = (this.data.fcmTokens[userId] ??= []);
+    const record: StoredFcmToken = { token, device, createdAt: Date.now() };
+    const index = list.findIndex((item) => item.token === token);
+    if (index === -1) {
+      list.push(record);
+      if (list.length > 10) list.splice(0, list.length - 10);
+    } else {
+      list[index] = record;
+    }
+    this.saveSoon();
+  }
+
+  removeFcmToken(userId: string, token: string): void {
+    const list = this.data.fcmTokens[userId];
+    if (!list) return;
+    const next = list.filter((item) => item.token !== token);
+    if (next.length === list.length) return;
+    if (next.length) this.data.fcmTokens[userId] = next;
+    else delete this.data.fcmTokens[userId];
     this.saveSoon();
   }
 }
