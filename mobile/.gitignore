@@ -1,0 +1,14 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+
+# Firebase-ключи и подписи не должны попадать в репозиторий
+app/google-services.json
+*.jks
+*.keystore
+keystore.properties

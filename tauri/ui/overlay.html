@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LA2Speak — канал</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ok: #3ddc97;
+        --overlay-font: 11px;
+        --overlay-color: #dfe5f2;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        color: #e7eaf3;
+        -webkit-user-select: none;
+        user-select: none;
+        padding: 4px;
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        padding: 4px 6px;
+      }
+
+      .card[hidden] {
+        display: none;
+      }
+
+      /* Ручное положение: карточка становится перетаскиваемой (атрибут
+         data-tauri-drag-region выставляет overlay.js), а весь оверлей на время
+         настройки перехватывает мышь. */
+      body.editing .card {
+        border-radius: 8px;
+        background: rgba(11, 14, 21, 0.72);
+        outline: 1px dashed rgba(108, 124, 255, 0.85);
+      }
+
+      .edit-bar {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+        height: 24px;
+        padding: 0 2px 2px;
+      }
+
+      body.editing .edit-bar {
+        display: flex;
+      }
+
+      .edit-bar span {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        font-size: 10px;
+        color: #aab4cb;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .edit-bar button {
+        padding: 2px 8px;
+        border: 1px solid rgba(108, 124, 255, 0.6);
+        border-radius: 5px;
+        background: rgba(108, 124, 255, 0.2);
+        color: #dfe5f2;
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+      }
+
+      .edit-bar button:hover {
+        background: rgba(108, 124, 255, 0.35);
+      }
+
+      .rows {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--overlay-font) * 0.64);
+        height: calc(var(--overlay-font) + 11px);
+        padding: 0 4px;
+        flex: 0 0 auto;
+      }
+
+      .activity {
+        width: calc(var(--overlay-font) * 0.73);
+        height: calc(var(--overlay-font) * 0.73);
+        border-radius: 50%;
+        flex-shrink: 0;
+        visibility: hidden;
+      }
+
+      .row.speaking .activity {
+        visibility: visible;
+        background: var(--ok);
+        box-shadow:
+          0 0 6px rgba(61, 220, 151, 0.9),
+          0 1px 2px rgba(0, 0, 0, 0.7);
+      }
+
+      .name {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--overlay-font);
+        font-weight: 500;
+        color: var(--overlay-color);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+      }
+
+      .row.speaking .name {
+        color: #ffffff;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="card" class="card" hidden>
+      <div id="edit-bar" class="edit-bar">
+        <span>Перетащите оверлей</span>
+        <button id="edit-done" type="button">Готово</button>
+      </div>
+      <div id="rows" class="rows"></div>
+    </div>
+    <script src="overlay.js"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "la2speak-tauri",
+  "private": true,
+  "version": "1.0.0",
+  "description": "LA2Speak — десктопный клиент на Tauri 2",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LA2Speak</string>
+    <string name="servers_title">Серверы</string>
+    <string name="servers_subtitle">Выберите сохранённый сервер или введите адрес своего.</string>
+    <string name="server_hint">https://ваш-сервер.com</string>
+    <string name="connect">Подключиться</string>
+    <string name="battery_title">Работа в фоне</string>
+    <string name="battery_hint">Разрешите приложению работать без ограничений батареи, чтобы голосовой канал не обрывался при заблокированном экране.</string>
+    <string name="notifications">Уведомления</string>
+    <string name="voice_channel">Голосовой канал</string>
+</resources>
