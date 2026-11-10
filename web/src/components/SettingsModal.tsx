@@ -1233,7 +1233,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <button
                   type="button"
                   className="btn-ghost h-8 gap-1.5 px-3 text-xs"
-                  onClick={() => mobile.requestNotifications()}
+                  onClick={() => mobile?.requestNotifications()}
                 >
                   <Bell className="h-3.5 w-3.5" />
                   Уведомления
@@ -1241,7 +1241,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <button
                   type="button"
                   className="btn-ghost h-8 gap-1.5 px-3 text-xs"
-                  onClick={() => mobile.requestBatteryOptimization()}
+                  onClick={() => mobile?.requestBatteryOptimization()}
                 >
                   <ShieldCheck className="h-3.5 w-3.5" />
                   Работа в фоне
