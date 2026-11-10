@@ -165,11 +165,15 @@ function serverView(server: TenantRecord) {
   };
 }
 
-function findDesktopInstaller(): { file: string; name: string; size: number } | null {
+function findInstaller(match: (name: string) => boolean): {
+  file: string;
+  name: string;
+  size: number;
+} | null {
   try {
     const candidates = fs
       .readdirSync(config.desktopInstallerDir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && /\.exe$/i.test(entry.name))
+      .filter((entry) => entry.isFile() && match(entry.name))
       .map((entry) => {
         const file = path.join(config.desktopInstallerDir, entry.name);
         const stat = fs.statSync(file);
@@ -181,6 +185,18 @@ function findDesktopInstaller(): { file: string; name: string; size: number } | 
   } catch {
     return null;
   }
+}
+
+function findDesktopInstaller() {
+  return findInstaller((name) => /\.exe$/i.test(name));
+}
+
+function findRustInstaller() {
+  return findInstaller((name) => /rust.*\.exe$/i.test(name));
+}
+
+function findAndroidApk() {
+  return findInstaller((name) => /\.apk$/i.test(name));
 }
 
 function platformMeta() {
@@ -633,6 +649,25 @@ app.get('/download/windows', (_req, res) => {
     return;
   }
   res.download(installer.file, installer.name);
+});
+
+app.get('/download/windows-rust', (_req, res) => {
+  const installer = findRustInstaller();
+  if (!installer) {
+    res.status(404).type('text/plain').send('Сборка LA2Speak Rust пока не загружена.');
+    return;
+  }
+  res.download(installer.file, installer.name);
+});
+
+app.get('/download/android', (_req, res) => {
+  const apk = findAndroidApk();
+  if (!apk) {
+    res.status(404).type('text/plain').send('APK LA2Speak для Android пока не загружен.');
+    return;
+  }
+  res.type('application/vnd.android.package-archive');
+  res.download(apk.file, apk.name);
 });
 
 // ---------- platform admin UI ----------
