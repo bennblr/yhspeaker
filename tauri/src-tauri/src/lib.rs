@@ -21,7 +21,7 @@ use tauri_plugin_opener::OpenerExt;
 const DEFAULT_SERVER_DOMAIN: &str = "la2speak.com";
 const CONFIG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BRIDGE_JS: &str = include_str!("../bridge.js");
-const DRAG_JS: &str = include_str!("drag.js");
+const DRAG_JS: &str = include_str!("../drag.js");
 const OVERLAY_FONT_DEFAULT: u32 = 11;
 const OVERLAY_FONT_MIN: u32 = 10;
 const OVERLAY_FONT_MAX: u32 = 24;
@@ -1343,7 +1343,10 @@ fn respond(request: tiny_http::Request, cors: &[(String, String)], body: String)
     ) {
         headers.push(header);
     }
-    let response = tiny_http::Response::from_string(body).with_headers(headers);
+    let mut response = tiny_http::Response::from_string(body);
+    for header in headers {
+        response.add_header(header);
+    }
     let _ = request.respond(response);
 }
 

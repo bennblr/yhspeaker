@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LA2Speak",
+  "productName": "LA2Speak Rust",
   "version": "1.0.0",
-  "identifier": "ru.la2speak.client",
+  "identifier": "ru.la2speak.client.rust",
   "build": {
     "frontendDist": "../ui"
   },
