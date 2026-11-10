@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -16,6 +17,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -70,7 +72,16 @@ class WebAppActivity : AppCompatActivity() {
 
         webView = WebView(this)
         webView.setBackgroundColor(ContextCompat.getColor(this, R.color.bg))
-        setContentView(webView)
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(ContextCompat.getColor(this@WebAppActivity, R.color.bg))
+            addView(
+                webView,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        setContentView(root)
+        applySystemBarInsets(window, root)
 
         with(webView.settings) {
             javaScriptEnabled = true

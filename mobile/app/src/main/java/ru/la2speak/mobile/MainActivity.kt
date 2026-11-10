@@ -22,6 +22,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_servers)
+        applySystemBarInsets(window, findViewById(R.id.root))
         serverList = findViewById(R.id.serverList)
         serverInput = findViewById(R.id.serverInput)
 
