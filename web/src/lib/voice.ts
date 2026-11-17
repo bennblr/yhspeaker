@@ -453,6 +453,9 @@ export class VoiceEngine {
     this.deafened = deafened;
     patchVoice({ deafened });
     for (const [id, element] of this.audioElements) {
+      // Маршрутизированные элементы всегда muted и служат только для
+      // декодирования; слышимостью управляет GainNode.
+      if (this.playbackNodes.has(id)) continue;
       const entry = this.consumers.get(id);
       element.muted = deafened || (entry ? this.localMuted.has(entry.userId) : false);
     }
@@ -467,6 +470,7 @@ export class VoiceEngine {
     this.localMuted.clear();
     for (const id of userIds) this.localMuted.add(id);
     for (const [id, element] of this.audioElements) {
+      if (this.playbackNodes.has(id)) continue;
       const entry = this.consumers.get(id);
       if (!entry) continue;
       element.muted = this.deafened || this.localMuted.has(entry.userId);
@@ -570,19 +574,21 @@ export class VoiceEngine {
 
   // Громкость каждого собеседника проходит через свой GainNode: так её можно
   // поднять выше 100%, чего не позволяет HTMLMediaElement.volume.
-  // Звук берём прямо из дорожки: createMediaElementSource для srcObject с
-  // MediaStream в WebView (Android) может не подключаться, и тогда слайдер
-  // громкости молча перестаёт действовать.
+  // Глушим сам <audio> и отдаём звук в граф: muted-элемент остаётся нужен,
+  // чтобы Chromium декодировал удалённую дорожку (без него RTP приходит, но
+  // сэмплы не декодируются и звука нет), а createMediaElementSource для
+  // srcObject с MediaStream молча отдаёт тишину.
   private applyPlaybackLevels(): void {
-    for (const [consumerId, nodes] of this.playbackNodes) {
-      const entry = this.consumers.get(consumerId);
-      if (!entry) continue;
-      nodes.gain.gain.value = this.isAudible(entry.userId) ? this.userGain(entry.userId) : 0;
-    }
     for (const [consumerId, element] of this.audioElements) {
-      if (this.playbackNodes.has(consumerId)) continue;
       const entry = this.consumers.get(consumerId);
       if (!entry) continue;
+      const nodes = this.playbackNodes.get(consumerId);
+      if (nodes) {
+        nodes.gain.gain.value = this.isAudible(entry.userId) ? this.userGain(entry.userId) : 0;
+        if (!element.muted) element.muted = true;
+        continue;
+      }
+      element.muted = !this.isAudible(entry.userId);
       element.volume = Math.max(0, Math.min(1, this.userGain(entry.userId)));
     }
   }
@@ -745,19 +751,25 @@ export class VoiceEngine {
 
       if (params.kind === 'audio') {
         const stream = new MediaStream([consumer.track]);
-        if (!this.routePlayback(consumer.id, stream, params.userId)) {
+        // Элемент нужен всегда: он заставляет Chromium декодировать удалённую
+        // дорожку. Сам он молчит (muted), звук выводит WebAudio-граф ниже.
+        const element = new Audio();
+        element.srcObject = stream;
+        element.autoplay = true;
+        element.setAttribute('playsinline', '');
+        element.setAttribute('data-la2speak-audio', params.sessionId);
+        document.body.appendChild(element);
+        const routed = this.routePlayback(consumer.id, stream, params.userId);
+        if (routed) {
+          element.muted = true;
+          element.volume = 1;
+        } else {
           // Без WebAudio громкость остаётся на уровне элемента (не выше 100%).
-          const element = new Audio();
-          element.srcObject = stream;
-          element.autoplay = true;
-          element.setAttribute('playsinline', '');
           element.muted = !this.isAudible(params.userId);
           element.volume = Math.max(0, Math.min(1, this.userGain(params.userId)));
-          element.setAttribute('data-la2speak-audio', params.sessionId);
-          document.body.appendChild(element);
-          void element.play().catch(() => undefined);
-          this.audioElements.set(consumer.id, element);
         }
+        this.audioElements.set(consumer.id, element);
+        void element.play().catch(() => undefined);
         void this.applyOutputDevice(this.mySettings());
         this.startRemoteLevelWatch();
       } else {
