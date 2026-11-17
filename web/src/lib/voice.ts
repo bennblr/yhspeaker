@@ -71,7 +71,7 @@ export class VoiceEngine {
   private readonly audioElements = new Map<string, HTMLAudioElement>();
   private readonly playbackNodes = new Map<
     string,
-    { source: MediaElementAudioSourceNode; gain: GainNode }
+    { source: MediaStreamAudioSourceNode; gain: GainNode }
   >();
   private readonly userVolumes = new Map<string, number>();
   private readonly screenStreams = new Map<string, MediaStream>();
@@ -83,6 +83,7 @@ export class VoiceEngine {
   private generation = 0;
   private lastSettings: MicSettings = { ...DEFAULT_SETTINGS };
   private remoteLevelTimer: number | null = null;
+  private rejoinTimer: number | null = null;
   private remoteLevel = 0;
   private visibilityHandler: (() => void) | null = null;
   private readonly lastBytes = new Map<string, number>();
@@ -242,9 +243,12 @@ export class VoiceEngine {
         if (state !== 'failed') return;
         playSound('connectionLost');
         toast('error', 'Соединение с голосовым сервером потеряно');
+        this.scheduleRejoin();
       });
       recvTransport.on('connectionstatechange', (state) => {
-        if (state === 'failed') playSound('connectionLost');
+        if (state !== 'failed') return;
+        playSound('connectionLost');
+        this.scheduleRejoin();
       });
 
       this.sendTransport = sendTransport;
@@ -566,6 +570,9 @@ export class VoiceEngine {
 
   // Громкость каждого собеседника проходит через свой GainNode: так её можно
   // поднять выше 100%, чего не позволяет HTMLMediaElement.volume.
+  // Звук берём прямо из дорожки: createMediaElementSource для srcObject с
+  // MediaStream в WebView (Android) может не подключаться, и тогда слайдер
+  // громкости молча перестаёт действовать.
   private applyPlaybackLevels(): void {
     for (const [consumerId, nodes] of this.playbackNodes) {
       const entry = this.consumers.get(consumerId);
@@ -592,15 +599,11 @@ export class VoiceEngine {
     return this.playbackCtx;
   }
 
-  private routePlayback(
-    consumerId: string,
-    element: HTMLAudioElement,
-    userId: string,
-  ): boolean {
+  private routePlayback(consumerId: string, stream: MediaStream, userId: string): boolean {
     const ctx = this.ensurePlaybackCtx();
     if (!ctx) return false;
     try {
-      const source = ctx.createMediaElementSource(element);
+      const source = ctx.createMediaStreamSource(stream);
       const gain = ctx.createGain();
       gain.gain.value = this.isAudible(userId) ? this.userGain(userId) : 0;
       source.connect(gain).connect(ctx.destination);
@@ -742,17 +745,19 @@ export class VoiceEngine {
 
       if (params.kind === 'audio') {
         const stream = new MediaStream([consumer.track]);
-        const element = new Audio();
-        element.srcObject = stream;
-        element.autoplay = true;
-        element.setAttribute('playsinline', '');
-        element.muted = !this.isAudible(params.userId);
-        element.setAttribute('data-la2speak-audio', params.sessionId);
-        document.body.appendChild(element);
-        const routed = this.routePlayback(consumer.id, element, params.userId);
-        element.volume = routed ? 1 : Math.max(0, Math.min(1, this.userGain(params.userId)));
-        void element.play().catch(() => undefined);
-        this.audioElements.set(consumer.id, element);
+        if (!this.routePlayback(consumer.id, stream, params.userId)) {
+          // Без WebAudio громкость остаётся на уровне элемента (не выше 100%).
+          const element = new Audio();
+          element.srcObject = stream;
+          element.autoplay = true;
+          element.setAttribute('playsinline', '');
+          element.muted = !this.isAudible(params.userId);
+          element.volume = Math.max(0, Math.min(1, this.userGain(params.userId)));
+          element.setAttribute('data-la2speak-audio', params.sessionId);
+          document.body.appendChild(element);
+          void element.play().catch(() => undefined);
+          this.audioElements.set(consumer.id, element);
+        }
         void this.applyOutputDevice(this.mySettings());
         this.startRemoteLevelWatch();
       } else {
@@ -905,6 +910,10 @@ export class VoiceEngine {
 
   abort(): void {
     this.generation += 1;
+    if (this.rejoinTimer !== null) {
+      window.clearTimeout(this.rejoinTimer);
+      this.rejoinTimer = null;
+    }
     this.cleanupCall(true);
     patchVoice({
       channelId: null,
@@ -912,6 +921,28 @@ export class VoiceEngine {
       micReady: false,
       pttActive: false,
     });
+  }
+
+  // Сеть могла пропасть без разрыва сокета (смена сети, спящий ноутбук):
+  // сервер уже закрыл медиатранспорты, поэтому пересобираем их заново.
+  private scheduleRejoin(): void {
+    if (this.rejoinTimer !== null) return;
+    const channelId = this.currentChannelId;
+    if (!channelId) return;
+    this.rejoinTimer = window.setTimeout(() => {
+      this.rejoinTimer = null;
+      if (this.currentChannelId === channelId) void this.rejoin(channelId);
+    }, 1500);
+  }
+
+  async rejoin(channelId: string): Promise<void> {
+    if (this.currentChannelId !== channelId || !this.socket?.connected) return;
+    this.generation += 1;
+    this.socket.emit('voice:leave');
+    this.cleanupCall(true);
+    patchVoice({ channelId: null, connecting: false, micReady: false, pttActive: false });
+    toast('info', 'Голосовое соединение восстанавливается');
+    await this.join(channelId);
   }
 
   private closeTransports(): void {
@@ -980,6 +1011,10 @@ export class VoiceEngine {
 
   reset(): void {
     this.generation += 1;
+    if (this.rejoinTimer !== null) {
+      window.clearTimeout(this.rejoinTimer);
+      this.rejoinTimer = null;
+    }
     this.cleanupCall(true);
     for (const consumerId of [...this.playbackNodes.keys()]) this.disconnectPlayback(consumerId);
     if (this.playbackCtx) {

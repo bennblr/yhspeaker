@@ -167,6 +167,8 @@ export function App() {
   // Участники канала до обновления списка — чтобы отличить вход и выход.
   const prevUsersRef = useRef<OnlineUser[]>([]);
   const sessionEndedRef = useRef(false);
+  // Канал, в котором были до потери связи, — чтобы вернуться в него после реконнекта.
+  const rejoinChannelRef = useRef<string | null>(null);
   const me = useApp((state) => state.me);
   const connection = useApp((state) => state.connection);
   const channels = useApp((state) => state.channels);
@@ -254,9 +256,14 @@ export function App() {
     socket.on('disconnect', (reason) => {
       useApp.getState().setConnection('offline');
       useApp.getState().clearChannelUnlocks();
+      // Сервер перезапустился или сеть пропала: запоминаем канал и вернёмся в него
+      // после переподключения. При собственном выходе возвращаться не нужно.
+      const channelId = useApp.getState().voice.channelId;
+      const involuntary = reason !== 'io client disconnect' && !sessionEndedRef.current;
+      rejoinChannelRef.current = involuntary ? channelId : null;
       voice.abort();
       // Выход из аккаунта и завершение сессии сервером — не потеря связи.
-      if (reason !== 'io client disconnect' && !sessionEndedRef.current) {
+      if (involuntary) {
         playSound('connectionLost');
       }
     });
@@ -271,7 +278,7 @@ export function App() {
 
     socket.on('state:init', (init) => {
       useApp.getState().applyInit(init);
-      void voice.initDevice(init.routerRtpCapabilities);
+      const deviceReady = voice.initDevice(init.routerRtpCapabilities);
       refreshDmConversations();
       const peer = useApp.getState().dmPeer;
       if (peer) loadDmHistory(peer.id);
@@ -280,6 +287,19 @@ export function App() {
         pendingDmRef.current = null;
         openDmByUserId(pendingDm);
       }
+      // Переподключились после перезапуска сервера или обрыва сети — возвращаемся
+      // в канал, где были. Если канал защищён паролем и сервер его уже не помнит,
+      // join отклонится с сообщением, и пользователь войдёт вручную.
+      void deviceReady.then(() => {
+        const channelId = rejoinChannelRef.current;
+        if (!channelId) return;
+        rejoinChannelRef.current = null;
+        if (!socket.connected || useApp.getState().voice.channelId) return;
+        const channel = useApp
+          .getState()
+          .channels.find((item) => item.id === channelId && item.type === 'voice');
+        if (channel) void voice.join(channelId);
+      });
     });
 
     socket.on('state:me', (next) => {
@@ -407,6 +427,7 @@ export function App() {
     });
 
     return () => {
+      rejoinChannelRef.current = null;
       socket.disconnect();
       voice.reset();
     };
