@@ -20,6 +20,7 @@ export class SessionService {
     return {
       id: account.id,
       sessionId,
+      serverId: account.serverId,
       device: device.kind,
       deviceName: device.name,
       username: account.username,
@@ -156,8 +157,39 @@ export class SessionService {
     return updated;
   }
 
+  // Роль и метка принадлежат серверу: на других серверах устройства аккаунта
+  // не должны меняться.
+  updateAccountInServer(
+    userId: string,
+    serverId: string,
+    patch: Partial<OnlineUser>,
+    broadcast = true,
+  ): OnlineUser[] {
+    const updated: OnlineUser[] = [];
+    for (const online of this.sessionsOf(userId)) {
+      if (online.serverId !== serverId) continue;
+      Object.assign(online, patch);
+      updated.push(online);
+    }
+    if (broadcast && updated.length > 0) this.broadcastUsers();
+    return updated;
+  }
+
+  listInServer(serverId: string | null): OnlineUser[] {
+    return this.list().filter((user) => user.serverId === serverId);
+  }
+
+  // Каждый клиент видит только участников своего сервера.
   broadcastUsers(): void {
-    this.io.emit('state:users', this.list());
+    const byServer = new Map<string | null, OnlineUser[]>();
+    for (const user of this.list()) {
+      const list = byServer.get(user.serverId);
+      if (list) list.push(user);
+      else byServer.set(user.serverId, [user]);
+    }
+    for (const user of this.list()) {
+      this.getSocket(user.sessionId)?.emit('state:users', byServer.get(user.serverId) ?? []);
+    }
   }
 
   endAccount(userId: string, reason: string): void {

@@ -469,6 +469,7 @@ export function Sidebar({
   const users = useApp((state) => state.users);
   const channels = useApp((state) => state.channels);
   const config = useApp((state) => state.config);
+  const serverName = useApp((state) => state.serverName);
   const activeChannelId = useApp((state) => state.activeChannelId);
   const unread = useApp((state) => state.unread);
   const messageCounts = useApp((state) => state.messageCounts);
@@ -589,7 +590,7 @@ export function Sidebar({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-bold tracking-wide text-white">
-            {serverLabel(config?.serverName)}
+            {serverName ?? serverLabel(config?.serverName)}
           </div>
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted">
             <span

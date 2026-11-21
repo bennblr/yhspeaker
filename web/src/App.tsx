@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Lock, Menu, Radio, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
+import { ServerRail } from './components/ServerRail';
 import { ChannelView } from './components/ChannelView';
 import { DirectChat } from './components/DirectChat';
 import { SettingsModal } from './components/SettingsModal';
@@ -181,6 +182,7 @@ export function App() {
   const appConfig = useApp((state) => state.config);
   const roles = useApp((state) => state.roles);
   const broadcastGroups = useApp((state) => state.broadcastGroups);
+  const workspaceName = useApp((state) => state.serverName);
   const canManageChannels = hasPermission(me, roles, 'channels');
   const canBroadcast = hasPermission(me, roles, 'broadcast');
 
@@ -334,6 +336,10 @@ export function App() {
 
     socket.on('roles:update', (roles) => {
       useApp.getState().setRoles(roles);
+    });
+
+    socket.on('servers:update', (servers) => {
+      useApp.getState().setServers(servers);
     });
 
     socket.on('config:update', (next: PublicServerConfig) => {
@@ -970,6 +976,7 @@ export function App() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
+        <ServerRail />
         <Sidebar
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenAdmin={() => setAdminOpen(true)}
@@ -988,10 +995,10 @@ export function App() {
           </button>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-slate-100">
-              {dmPeer?.displayName ?? activeChannel?.name ?? serverName}
+              {dmPeer?.displayName ?? activeChannel?.name ?? workspaceName ?? serverName}
             </div>
             <div className="truncate text-[10px] uppercase tracking-wider text-muted">
-              {dmPeer ? 'Личные сообщения' : serverName}
+              {dmPeer ? 'Личные сообщения' : (workspaceName ?? serverName)}
             </div>
           </div>
           <span

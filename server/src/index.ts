@@ -27,7 +27,9 @@ import {
   type DmParticipant,
   type OnlineUser,
   type PermissionKey,
+  type Role,
   type RolePermissions,
+  type ServerSummary,
 } from '@tsds/shared';
 import {
   AuthService,
@@ -53,7 +55,12 @@ class HttpError extends Error {
   }
 }
 
-const store = new Store(config.dataDir, config.guestInviteCode, config.guestInviteRequired);
+const store = new Store(
+  config.dataDir,
+  config.guestInviteCode,
+  config.guestInviteRequired,
+  config.serverName,
+);
 const app = express();
 const httpServer = http.createServer(app);
 const io: AppServer = new Server(httpServer, {
@@ -121,15 +128,22 @@ function accountFromRequest(req: Request): Account {
   return account;
 }
 
+function rolesOf(serverId: string | null | undefined): Role[] {
+  return serverId ? store.roles(serverId) : [];
+}
+
 function requirePermission(account: Account, permission: PermissionKey): void {
-  if (!hasPermission(account, store.roles(), permission)) {
+  if (!account.serverId || !hasPermission(account, rolesOf(account.serverId), permission)) {
     throw new HttpError(403, 'Недостаточно прав');
   }
 }
 
 function requireAnyPermission(account: Account, permissions: PermissionKey[]): void {
-  const roles = store.roles();
-  if (!permissions.some((permission) => hasPermission(account, roles, permission))) {
+  const roles = rolesOf(account.serverId);
+  if (
+    !account.serverId ||
+    !permissions.some((permission) => hasPermission(account, roles, permission))
+  ) {
     throw new HttpError(403, 'Недостаточно прав');
   }
 }
@@ -279,6 +293,7 @@ const rolePermissionsSchema = z.object({
   roles: z.boolean().default(false),
   groups: z.boolean().default(false),
   invite: z.boolean().default(false),
+  createServer: z.boolean().default(false),
 });
 
 const roleSchema = z.object({
@@ -291,48 +306,59 @@ const roleSchema = z.object({
   permissions: rolePermissionsSchema,
 });
 
-function canSeeGroups(user: { role: Account['role']; roleIds?: string[] }): boolean {
-  const roles = store.roles();
+function canSeeGroups(user: {
+  role: Account['role'];
+  roleIds?: string[];
+  serverId?: string | null;
+}): boolean {
+  const roles = rolesOf(user.serverId);
   return (
     hasPermission(user, roles, 'groups') || hasPermission(user, roles, 'broadcast')
   );
 }
 
-function emitGroups(): void {
-  const groups = store.broadcastGroups();
-  for (const user of sessions.list()) {
+function emitGroups(serverId: string): void {
+  const groups = store.broadcastGroups(serverId);
+  for (const user of sessions.listInServer(serverId)) {
     sessions
       .getSocket(user.sessionId)
       ?.emit('groups:update', canSeeGroups(user) ? groups : []);
   }
 }
 
-function channelsFor(user: { role: BaseRole; roleIds?: string[] }): Channel[] {
-  return store.channels().filter((channel) => isChannelVisible(user, channel));
+function channelsFor(user: {
+  serverId?: string | null;
+  role: BaseRole;
+  roleIds?: string[];
+}): Channel[] {
+  if (!user.serverId) return [];
+  return store.channels(user.serverId).filter((channel) => isChannelVisible(user, channel));
 }
 
 function canAccessChannel(
-  user: { id: string; role: BaseRole; roleIds?: string[] },
+  user: { id: string; role: BaseRole; roleIds?: string[]; serverId?: string | null },
   channel: Channel,
 ): boolean {
+  // Каналы другого сервера не существуют для этой сессии.
+  if (!user.serverId || channel.serverId !== user.serverId) return false;
   if (!isChannelVisible(user, channel)) return false;
   if (user.role === 'admin') return true;
   const stored = store.channelById(channel.id);
   return !stored?.passwordHash || sessions.isChannelUnlocked(user.id, channel.id);
 }
 
-function normalizeVisibility(input: {
-  visibleRoles?: BaseRole[];
-  visibleRoleIds?: string[];
-}): { visibleRoles: BaseRole[]; visibleRoleIds: string[] } {
+function normalizeVisibility(
+  serverId: string,
+  input: { visibleRoles?: BaseRole[]; visibleRoleIds?: string[] },
+): { visibleRoles: BaseRole[]; visibleRoleIds: string[] } {
   const visibleRoles = [...new Set(input.visibleRoles ?? BASE_ROLES)];
-  const known = new Set(store.roles().map((role) => role.id));
+  const known = new Set(store.roles(serverId).map((role) => role.id));
   const visibleRoleIds = [...new Set(input.visibleRoleIds ?? [])].filter((id) => known.has(id));
   return { visibleRoles, visibleRoleIds };
 }
 
-function emitChannels(): void {
-  for (const user of sessions.list()) {
+function emitChannels(serverId: string): void {
+  for (const user of sessions.listInServer(serverId)) {
     sessions.getSocket(user.sessionId)?.emit('channels:update', channelsFor(user));
   }
 }
@@ -341,14 +367,29 @@ function emitChannels(): void {
 async function enforceChannelAccess(): Promise<void> {
   for (const user of sessions.list()) {
     if (!user.channelId) continue;
-    const channel = store.channels().find((item) => item.id === user.channelId);
-    if (!channel || canAccessChannel(user, channel)) continue;
+    const channel = store.channelById(user.channelId);
+    if (!channel) continue;
+    const dto = store
+      .channels(channel.serverId)
+      .find((item) => item.id === channel.id);
+    if (!dto || canAccessChannel(user, dto)) continue;
     await voice.kick(user.sessionId, 'система');
     sessions.getSocket(user.sessionId)?.emit('toast', {
       type: 'info',
       text: `Канал «${channel.name}» больше не доступен вам`,
     });
   }
+}
+
+// Роль и метка аккаунта зависят от сервера; для офлайн-собеседника берём
+// тот общий сервер, где он состоит.
+function memberView(userId: string): { role: BaseRole; roleIds: string[]; label?: string } {
+  const membership = store.membership(store.preferredServerId(userId), userId);
+  return {
+    role: membership?.role ?? 'guest',
+    roleIds: membership ? [...membership.roleIds] : [],
+    label: membership?.label,
+  };
 }
 
 // Собеседник личного чата: сначала берём живое подключение, чтобы ник и метка
@@ -365,15 +406,16 @@ function dmParticipant(userId: string): DmParticipant | null {
   }
   const stored = store.userById(userId);
   if (!stored) return null;
+  const view = memberView(userId);
   return {
     id: stored.id,
     displayName: stored.displayName,
-    label: stored.label,
-    role: stored.role,
+    label: view.label,
+    role: view.role,
   };
 }
 
-// Все аккаунты сервера плюс гости, которые есть только в живых сессиях.
+// Аккаунты общих серверов плюс гости, которые есть только в живых сессиях.
 // Офлайн-аккаунты остаются в списке: сообщение сохранится и дойдёт при входе.
 function dmCandidates(userId: string): DmCandidate[] {
   const onlineByUser = new Map<string, OnlineUser>();
@@ -383,17 +425,22 @@ function dmCandidates(userId: string): DmCandidate[] {
     }
   }
 
+  const myServers = new Set(store.membershipsOf(userId).map((membership) => membership.serverId));
+  const shared = store.sharedServerUserIds(userId);
   const candidates = new Map<string, DmCandidate>();
   for (const user of store.users()) {
-    if (user.id === userId || user.banned) continue;
+    if (user.id === userId || user.banned || !shared.has(user.id)) continue;
     const online = onlineByUser.get(user.id);
+    const membership = store
+      .membershipsOf(user.id)
+      .find((item) => myServers.has(item.serverId));
     candidates.set(user.id, {
       id: user.id,
       displayName: online?.displayName ?? user.displayName,
-      label: online?.label ?? user.label,
-      role: online?.role ?? user.role,
+      label: membership?.label,
+      role: membership?.role ?? 'guest',
       isGuest: false,
-      roleIds: online?.roleIds ?? user.roleIds,
+      roleIds: membership ? [...membership.roleIds] : [],
       online: Boolean(online),
       deviceName: online?.deviceName,
     });
@@ -401,6 +448,7 @@ function dmCandidates(userId: string): DmCandidate[] {
 
   for (const online of onlineByUser.values()) {
     if (candidates.has(online.id) || store.userById(online.id)) continue;
+    if (!online.serverId || !myServers.has(online.serverId)) continue;
     candidates.set(online.id, {
       id: online.id,
       displayName: online.displayName,
@@ -426,16 +474,22 @@ function channelSockets(channel: Channel) {
     .map((user) => sessions.getSocket(user.sessionId));
 }
 
-function emitRoles(): void {
-  io.emit('roles:update', store.roles());
+function emitRoles(serverId: string): void {
+  for (const user of sessions.listInServer(serverId)) {
+    sessions.getSocket(user.sessionId)?.emit('roles:update', store.roles(serverId));
+  }
 }
 
-function applyRoleLoss(userId: string, roleIds: string[]): void {
-  if (sessions.hasAccount(userId)) sessions.updateAccount(userId, { roleIds });
+function applyRoleLoss(userId: string, serverId: string, roleIds: string[]): void {
+  if (sessions.hasAccount(userId)) {
+    sessions.updateAccountInServer(userId, serverId, { roleIds });
+  }
 }
 
-function groupMembers(ids: string[]): string[] {
-  const members = [...new Set(ids)].filter((id) => Boolean(store.userById(id)));
+function groupMembers(serverId: string, ids: string[]): string[] {
+  const members = [...new Set(ids)].filter((id) =>
+    Boolean(store.membership(serverId, id)),
+  );
   if (members.length === 0) {
     throw new HttpError(400, 'Выберите хотя бы одного зарегистрированного участника');
   }
@@ -455,7 +509,7 @@ function publicConfig() {
 function clientConfigFor(account: Account) {
   return {
     ...publicConfig(),
-    guestInviteCode: hasPermission(account, store.roles(), 'invite')
+    guestInviteCode: hasPermission(account, rolesOf(account.serverId), 'invite')
       ? store.inviteCode
       : undefined,
     maxMessageLength: MAX_MESSAGE_LENGTH,
@@ -464,6 +518,111 @@ function clientConfigFor(account: Account) {
 
 function emitConfig(): void {
   io.emit('config:update', publicConfig());
+}
+
+// ---------- серверы аккаунта ----------
+
+function serverSummaries(account: Account): ServerSummary[] {
+  const memberships = account.isGuest ? [] : store.membershipsOf(account.id);
+  const canCreate = memberships.some((membership) =>
+    hasPermission(
+      { role: membership.role, roleIds: membership.roleIds },
+      store.roles(membership.serverId),
+      'createServer',
+    ),
+  );
+  return store.serversOf(account.id).map((server) => {
+    const membership = store.membership(server.id, account.id)!;
+    const canInvite = hasPermission(
+      { role: membership.role, roleIds: membership.roleIds },
+      store.roles(server.id),
+      'invite',
+    );
+    return {
+      id: server.id,
+      name: server.name,
+      ownerId: server.ownerId,
+      role: membership.role,
+      memberCount: store.memberIds(server.id).length,
+      canCreate,
+      inviteCode: canInvite ? server.inviteCode : undefined,
+      createdAt: server.createdAt,
+    };
+  });
+}
+
+function emitServers(userId: string): void {
+  for (const online of sessions.sessionsOf(userId)) {
+    const account = socketAccounts.get(online.sessionId);
+    if (!account) continue;
+    sessions
+      .getSocket(online.sessionId)
+      ?.emit('servers:update', serverSummaries(account));
+  }
+}
+
+// Состав участников сервера меняется — обновляем счётчики у всех его участников.
+function emitServersForMembers(serverId: string): void {
+  for (const userId of store.memberIds(serverId)) emitServers(userId);
+}
+
+// Полное состояние подключения: его получает клиент при входе и после
+// переключения сервера.
+function sendInit(socket: AppSocket, account: Account): void {
+  const online = sessions.get(socket.id);
+  if (!online) return;
+  const server = store.serverById(online.serverId);
+  const visibleChannels = channelsFor(online);
+  socket.emit('state:init', {
+    me: online,
+    users: sessions.listInServer(online.serverId),
+    channels: visibleChannels,
+    broadcastGroups: canSeeGroups(online) && online.serverId
+      ? store.broadcastGroups(online.serverId)
+      : [],
+    roles: rolesOf(online.serverId),
+    routerRtpCapabilities: voice.rtpCapabilities(),
+    config: clientConfigFor(account),
+    messageCounts: Object.fromEntries(
+      visibleChannels.map((channel) => [channel.id, store.messageCount(channel.id)]),
+    ),
+    server: server ? { id: server.id, name: server.name } : null,
+    servers: serverSummaries(account),
+  });
+}
+
+// Переключение только меняет «окно» этой сессии: аккаунт, другие устройства
+// и голосовые сессии на прежнем сервере не затрагиваются.
+async function selectServer(
+  socket: AppSocket,
+  sessionId: string,
+  account: Account,
+  serverId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (account.isGuest) {
+    return { ok: false, error: 'Гостям доступен только основной сервер' };
+  }
+  const membership = store.membership(serverId, account.id);
+  if (!membership) return { ok: false, error: 'Вы не состоите на этом сервере' };
+  if (account.serverId === serverId) return { ok: true };
+
+  await voice.leave(sessionId);
+  const next = auth.accountFor(store.userById(account.id)!, serverId);
+  socketAccounts.set(socket.id, next);
+  sessions.update(
+    sessionId,
+    {
+      serverId: next.serverId,
+      role: next.role,
+      roleIds: [...next.roleIds],
+      label: next.label,
+    },
+    false,
+  );
+  store.setLastServer(account.id, serverId);
+  sessions.broadcastUsers();
+  sendInit(socket, next);
+  return { ok: true };
 }
 
 // ---------- devices ----------
@@ -669,7 +828,7 @@ app.get(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requireAnyPermission(account, ['moderate', 'roles', 'groups']);
-    res.json({ users: store.adminUsers() });
+    res.json({ users: store.adminUsers(account.serverId!) });
   }),
 );
 
@@ -727,7 +886,7 @@ app.get(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'groups');
-    res.json({ groups: store.broadcastGroups() });
+    res.json({ groups: store.broadcastGroups(account.serverId!) });
   }),
 );
 
@@ -736,12 +895,17 @@ app.post(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'groups');
+    const serverId = account.serverId!;
     const body = parseBody(broadcastGroupSchema, req.body);
-    if (store.broadcastGroupByName(body.name)) {
+    if (store.broadcastGroupByName(serverId, body.name)) {
       throw new HttpError(409, 'Группа с таким названием уже существует');
     }
-    const group = store.createBroadcastGroup(body.name, groupMembers(body.memberIds));
-    emitGroups();
+    const group = store.createBroadcastGroup(
+      serverId,
+      body.name,
+      groupMembers(serverId, body.memberIds),
+    );
+    emitGroups(serverId);
     res.json({ group });
   }),
 );
@@ -751,18 +915,21 @@ app.put(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'groups');
+    const serverId = account.serverId!;
     const existing = store.broadcastGroupById(req.params.groupId);
-    if (!existing) throw new HttpError(404, 'Группа не найдена');
+    if (!existing || existing.serverId !== serverId) {
+      throw new HttpError(404, 'Группа не найдена');
+    }
     const body = parseBody(broadcastGroupSchema, req.body);
-    if (store.broadcastGroupByName(body.name, existing.id)) {
+    if (store.broadcastGroupByName(serverId, body.name, existing.id)) {
       throw new HttpError(409, 'Группа с таким названием уже существует');
     }
     const group = store.updateBroadcastGroup(existing.id, {
       name: body.name,
-      memberIds: groupMembers(body.memberIds),
+      memberIds: groupMembers(serverId, body.memberIds),
     });
-    emitGroups();
-    voice.onBroadcastGroupsChanged();
+    emitGroups(serverId);
+    voice.onBroadcastGroupsChanged(serverId);
     res.json({ group });
   }),
 );
@@ -772,11 +939,13 @@ app.delete(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'groups');
-    if (!store.deleteBroadcastGroup(req.params.groupId)) {
+    const serverId = account.serverId!;
+    const existing = store.broadcastGroupById(req.params.groupId);
+    if (!existing || existing.serverId !== serverId || !store.deleteBroadcastGroup(existing.id)) {
       throw new HttpError(404, 'Группа не найдена');
     }
-    emitGroups();
-    voice.onBroadcastGroupsChanged();
+    emitGroups(serverId);
+    voice.onBroadcastGroupsChanged(serverId);
     res.json({ ok: true });
   }),
 );
@@ -788,7 +957,7 @@ app.get(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'roles');
-    res.json({ roles: store.roles() });
+    res.json({ roles: store.roles(account.serverId!) });
   }),
 );
 
@@ -797,16 +966,17 @@ app.post(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'roles');
+    const serverId = account.serverId!;
     const body = parseBody(roleSchema, req.body);
-    if (store.roleByName(body.name)) {
+    if (store.roleByName(serverId, body.name)) {
       throw new HttpError(409, 'Роль с таким названием уже существует');
     }
-    const role = store.createRole({
+    const role = store.createRole(serverId, {
       name: body.name,
       color: body.color,
       permissions: body.permissions as RolePermissions,
     });
-    emitRoles();
+    emitRoles(serverId);
     res.json({ role });
   }),
 );
@@ -816,10 +986,13 @@ app.put(
   wrap((req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'roles');
+    const serverId = account.serverId!;
     const existing = store.roleById(req.params.roleId);
-    if (!existing) throw new HttpError(404, 'Роль не найдена');
+    if (!existing || existing.serverId !== serverId) {
+      throw new HttpError(404, 'Роль не найдена');
+    }
     const body = parseBody(roleSchema, req.body);
-    if (store.roleByName(body.name, existing.id)) {
+    if (store.roleByName(serverId, body.name, existing.id)) {
       throw new HttpError(409, 'Роль с таким названием уже существует');
     }
     const role = store.updateRole(existing.id, {
@@ -827,9 +1000,10 @@ app.put(
       color: body.color,
       permissions: body.permissions as RolePermissions,
     });
-    emitRoles();
-    emitGroups();
-    voice.onPermissionsChanged();
+    emitRoles(serverId);
+    emitGroups(serverId);
+    voice.onPermissionsChanged(serverId);
+    emitServers(account.id);
     res.json({ role });
   }),
 );
@@ -839,20 +1013,49 @@ app.delete(
   wrap(async (req, res) => {
     const account = accountFromRequest(req);
     requirePermission(account, 'roles');
+    const serverId = account.serverId!;
     const existing = store.roleById(req.params.roleId);
-    if (!existing) throw new HttpError(404, 'Роль не найдена');
-    const affected = store.deleteRole(existing.id);
+    if (!existing || existing.serverId !== serverId) {
+      throw new HttpError(404, 'Роль не найдена');
+    }
+    const affected = store.deleteRole(serverId, existing.id);
     for (const userId of affected) {
-      const user = store.userById(userId);
-      if (user) applyRoleLoss(userId, user.roleIds);
+      const membership = store.membership(serverId, userId);
+      if (membership) applyRoleLoss(userId, serverId, membership.roleIds);
     }
     sessions.broadcastUsers();
-    emitRoles();
-    emitChannels();
-    emitGroups();
-    voice.onPermissionsChanged();
+    emitRoles(serverId);
+    emitChannels(serverId);
+    emitGroups(serverId);
+    voice.onPermissionsChanged(serverId);
+    emitServers(account.id);
     await enforceChannelAccess();
     res.json({ ok: true });
+  }),
+);
+
+// Код приглашения конкретного сервера: по нему новый участник входит
+// в список серверов, не создавая отдельной учётной записи.
+app.get(
+  '/api/server/invite',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    requirePermission(account, 'invite');
+    const server = store.serverById(account.serverId);
+    if (!server) throw new HttpError(404, 'Сервер не найден');
+    res.json({ code: server.inviteCode, name: server.name });
+  }),
+);
+
+app.post(
+  '/api/server/invite/regenerate',
+  wrap((req, res) => {
+    const account = accountFromRequest(req);
+    requirePermission(account, 'invite');
+    const code = store.regenerateServerInvite(account.serverId!);
+    if (!code) throw new HttpError(404, 'Сервер не найден');
+    emitServers(account.id);
+    res.json({ code });
   }),
 );
 
@@ -966,23 +1169,11 @@ io.on('connection', async (socket: AppSocket) => {
   const sessionId = socket.id;
   const device = socket.data.device ?? guessDevice(undefined);
 
-  const online = sessions.register(socket, account, device);
+  sessions.register(socket, account, device);
   // Продлеваем сессию при каждом подключении, чтобы активный пользователь
   // не вводил пароль заново по истечении срока токена.
   socket.emit('session:token', { token: auth.refreshToken(account) });
-  const visibleChannels = channelsFor(account);
-  socket.emit('state:init', {
-    me: online,
-    users: sessions.list(),
-    channels: visibleChannels,
-    broadcastGroups: canSeeGroups(account) ? store.broadcastGroups() : [],
-    roles: store.roles(),
-    routerRtpCapabilities: voice.rtpCapabilities(),
-    config: clientConfigFor(account),
-    messageCounts: Object.fromEntries(
-      visibleChannels.map((channel) => [channel.id, store.messageCount(channel.id)]),
-    ),
-  });
+  sendInit(socket, account);
 
   const chatTimestamps: number[] = [];
 
@@ -994,6 +1185,113 @@ io.on('connection', async (socket: AppSocket) => {
       });
     };
   };
+
+  const currentAccount = (): Account => socketAccounts.get(socket.id) ?? account;
+
+  socket.on(
+    'server:select',
+    safe(async (payload, ack) => {
+      const serverId = typeof payload?.serverId === 'string' ? payload.serverId : '';
+      if (!serverId) {
+        ack?.({ ok: false, error: 'Сервер не выбран' });
+        return;
+      }
+      const result = await selectServer(socket, sessionId, currentAccount(), serverId);
+      ack?.(result);
+    }),
+  );
+
+  socket.on(
+    'server:create',
+    safe(async (payload, ack) => {
+      const me = currentAccount();
+      if (me.isGuest) {
+        ack?.({ ok: false, error: 'Гостям нельзя создавать серверы' });
+        return;
+      }
+      const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 40) : '';
+      if (name.length < 2) {
+        ack?.({ ok: false, error: 'Название сервера: минимум 2 символа' });
+        return;
+      }
+      const allowed = store.membershipsOf(me.id).some((membership) =>
+        hasPermission(
+          { role: membership.role, roleIds: membership.roleIds },
+          store.roles(membership.serverId),
+          'createServer',
+        ),
+      );
+      if (!allowed) {
+        ack?.({ ok: false, error: 'Создавать серверы может только участник с этим правом' });
+        return;
+      }
+      const server = store.createServer(name, me.id);
+      const result = await selectServer(socket, sessionId, me, server.id);
+      emitServers(me.id);
+      ack?.(result.ok ? { ok: true, serverId: server.id } : result);
+    }),
+  );
+
+  socket.on(
+    'server:join',
+    safe(async (payload, ack) => {
+      const me = currentAccount();
+      if (me.isGuest) {
+        ack?.({ ok: false, error: 'Гостям доступен только основной сервер' });
+        return;
+      }
+      const code = typeof payload?.code === 'string' ? payload.code.trim() : '';
+      const server = store.serverByInviteCode(code);
+      if (!server) {
+        ack?.({ ok: false, error: 'Приглашение не найдено или устарело' });
+        return;
+      }
+      if (!store.membership(server.id, me.id)) {
+        store.addMember(server.id, me.id, 'member');
+      }
+      const result = await selectServer(socket, sessionId, me, server.id);
+      emitServersForMembers(server.id);
+      ack?.(result.ok ? { ok: true, serverId: server.id } : result);
+    }),
+  );
+
+  socket.on(
+    'server:leave',
+    safe(async (payload, ack) => {
+      const me = currentAccount();
+      const serverId = typeof payload?.serverId === 'string' ? payload.serverId : '';
+      const server = store.serverById(serverId);
+      if (!server) {
+        ack?.({ ok: false, error: 'Сервер не найден' });
+        return;
+      }
+      if (server.id === store.defaultServerId()) {
+        ack?.({ ok: false, error: 'Основной сервер покинуть нельзя' });
+        return;
+      }
+      if (server.ownerId === me.id) {
+        ack?.({ ok: false, error: 'Владелец не может покинуть сервер — передайте владение' });
+        return;
+      }
+      if (!store.membership(server.id, me.id)) {
+        ack?.({ ok: false, error: 'Вы не состоите на этом сервере' });
+        return;
+      }
+      store.removeMember(server.id, me.id);
+      // Устройства, которые смотрели этот сервер, возвращаем на основной.
+      const fallbackId = store.defaultServerId();
+      for (const online of sessions.sessionsOf(me.id)) {
+        if (online.serverId !== server.id) continue;
+        const onlineSocket = sessions.getSocket(online.sessionId);
+        const onlineAccount = socketAccounts.get(online.sessionId);
+        if (!onlineSocket || !onlineAccount) continue;
+        await selectServer(onlineSocket, online.sessionId, onlineAccount, fallbackId);
+      }
+      emitServersForMembers(server.id);
+      emitServers(me.id);
+      ack?.({ ok: true });
+    }),
+  );
 
   socket.on(
     'voice:join',
@@ -1181,10 +1479,10 @@ io.on('connection', async (socket: AppSocket) => {
     'admin:deleteMessage',
     safe(async ({ channelId, messageId }) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) return;
+      if (!me || !hasPermission(me, rolesOf(me.serverId), 'moderate')) return;
+      const channel = store.channelById(channelId);
+      if (!channel || channel.serverId !== me.serverId) return;
       if (store.deleteMessage(channelId, messageId)) {
-        const channel = store.channelById(channelId);
-        if (!channel) return;
         for (const target of channelSockets(channel)) {
           target?.emit('chat:deleted', { channelId, messageId });
         }
@@ -1202,7 +1500,7 @@ io.on('connection', async (socket: AppSocket) => {
       }
       const body = parseBody(unlockSchema, payload);
       const channel = store.channelById(body.channelId);
-      if (!channel) {
+      if (!channel || channel.serverId !== me.serverId) {
         ack?.({ ok: false, error: 'Канал не найден' });
         return;
       }
@@ -1239,19 +1537,20 @@ io.on('connection', async (socket: AppSocket) => {
     'admin:createChannel',
     safe(async (payload, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'channels')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'channels')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
+      const serverId = me.serverId;
       const body = parseBody(channelSchema, payload);
-      if (store.channelByName(body.name)) {
+      if (store.channelByName(serverId, body.name)) {
         ack?.({ ok: false, error: 'Канал с таким названием уже существует' });
         return;
       }
       const password = body.password?.trim() ?? '';
       const passwordHash = password ? await hashChannelPassword(password) : undefined;
-      store.createChannel(body.name, body.type, passwordHash, normalizeVisibility(body));
-      emitChannels();
+      store.createChannel(serverId, body.name, body.type, passwordHash, normalizeVisibility(serverId, body));
+      emitChannels(serverId);
       ack?.({ ok: true });
     }),
   );
@@ -1260,17 +1559,18 @@ io.on('connection', async (socket: AppSocket) => {
     'admin:updateChannel',
     safe(async (payload, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'channels')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'channels')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
+      const serverId = me.serverId;
       const body = parseBody(channelUpdateSchema, payload);
       const channel = store.channelById(body.channelId);
-      if (!channel) {
+      if (!channel || channel.serverId !== serverId) {
         ack?.({ ok: false, error: 'Канал не найден' });
         return;
       }
-      if (store.channelByName(body.name, channel.id)) {
+      if (store.channelByName(serverId, body.name, channel.id)) {
         ack?.({ ok: false, error: 'Канал с таким названием уже существует' });
         return;
       }
@@ -1283,7 +1583,7 @@ io.on('connection', async (socket: AppSocket) => {
         }
         passwordHash = password ? await hashChannelPassword(password) : null;
       }
-      const normalized = normalizeVisibility(body);
+      const normalized = normalizeVisibility(serverId, body);
       store.updateChannel(channel.id, {
         name: body.name,
         passwordHash,
@@ -1298,10 +1598,10 @@ io.on('connection', async (socket: AppSocket) => {
                 : {}),
             }),
       });
-      const updated = store.channels().find((item) => item.id === channel.id);
+      const updated = store.channels(serverId).find((item) => item.id === channel.id);
       if (updated) {
         const wasProtected = Boolean(channel.passwordHash);
-        for (const user of sessions.list()) {
+        for (const user of sessions.listInServer(serverId)) {
           if (user.channelId !== channel.id) continue;
           if (user.role === 'admin') continue;
           if (canAccessChannel(user, updated)) continue;
@@ -1315,7 +1615,7 @@ io.on('connection', async (socket: AppSocket) => {
           });
         }
       }
-      emitChannels();
+      emitChannels(serverId);
       ack?.({ ok: true });
     }),
   );
@@ -1324,12 +1624,13 @@ io.on('connection', async (socket: AppSocket) => {
     'admin:deleteChannel',
     safe(async ({ channelId }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'channels')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'channels')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
+      const serverId = me.serverId;
       const channel = store.channelById(channelId);
-      if (!channel) {
+      if (!channel || channel.serverId !== serverId) {
         ack?.({ ok: false, error: 'Канал не найден' });
         return;
       }
@@ -1337,7 +1638,7 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Гостевой канал создаётся автоматически и не удаляется' });
         return;
       }
-      for (const user of sessions.list()) {
+      for (const user of sessions.listInServer(serverId)) {
         if (user.channelId === channelId) {
           await voice.kick(user.sessionId, 'система');
           sessions.getSocket(user.sessionId)?.emit('toast', {
@@ -1348,7 +1649,7 @@ io.on('connection', async (socket: AppSocket) => {
       }
       store.deleteChannel(channelId);
       sessions.clearChannelUnlocks(channelId);
-      emitChannels();
+      emitChannels(serverId);
       ack?.({ ok: true });
     }),
   );
@@ -1357,25 +1658,29 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:serverMute',
     safe(async ({ userId: targetId, muted }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'moderate')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
-      if (!sessions.hasAccount(targetId)) {
+      const serverId = me.serverId;
+      const targets = sessions
+        .sessionsOf(targetId)
+        .filter((item) => item.serverId === serverId);
+      if (targets.length === 0) {
         ack?.({ ok: false, error: 'Пользователь не в сети' });
         return;
       }
-      const target = sessions.sessionsOf(targetId)[0];
+      const target = targets[0];
       if (
         me.role === 'moderator' &&
-        (target?.role === 'admin' || target?.role === 'moderator')
+        (target.role === 'admin' || target.role === 'moderator')
       ) {
         ack?.({ ok: false, error: 'Модератор не может управлять администраторами' });
         return;
       }
-      await voice.applyServerMute(targetId, Boolean(muted));
-      for (const socket of sessions.socketsOf(targetId)) {
-        socket.emit('toast', {
+      await voice.applyServerMute(targetId, serverId, Boolean(muted));
+      for (const item of targets) {
+        sessions.getSocket(item.sessionId)?.emit('toast', {
           type: muted ? 'info' : 'ok',
           text: muted
             ? 'Администратор отключил ваш микрофон'
@@ -1390,7 +1695,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:kick',
     safe(async ({ userId: targetId, sessionId: targetSessionId }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'moderate')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
@@ -1400,6 +1705,7 @@ io.on('connection', async (socket: AppSocket) => {
       }
       const targets = sessions
         .sessionsOf(targetId)
+        .filter((item) => item.serverId === me.serverId)
         .filter((item) => item.channelId)
         .filter((item) => !targetSessionId || item.sessionId === targetSessionId);
       if (targets.length === 0) {
@@ -1425,7 +1731,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:moveUser',
     safe(async ({ userId: targetId, sessionId: targetSessionId, channelId }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'moderate')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
@@ -1435,6 +1741,7 @@ io.on('connection', async (socket: AppSocket) => {
       }
       const targets = sessions
         .sessionsOf(targetId)
+        .filter((item) => item.serverId === me.serverId)
         .filter((item) => !targetSessionId || item.sessionId === targetSessionId);
       if (targets.length === 0) {
         ack?.({ ok: false, error: 'Пользователь не в сети' });
@@ -1452,7 +1759,9 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Модератор не может перемещать администраторов' });
         return;
       }
-      const channel = store.channels().find((item) => item.id === channelId);
+      const channel = store
+        .channels(me.serverId)
+        .find((item) => item.id === channelId);
       if (!channel || channel.type !== 'voice') {
         ack?.({ ok: false, error: 'Голосовой канал не найден' });
         return;
@@ -1486,8 +1795,8 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:ban',
     safe(async ({ userId: targetId, banned }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
-        ack?.({ ok: false, error: 'Недостаточно прав' });
+      if (!me?.serverId || me.role !== 'admin') {
+        ack?.({ ok: false, error: 'Блокировка доступна только администратору сервера' });
         return;
       }
       if (targetId === userId) {
@@ -1499,12 +1808,9 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Можно блокировать только зарегистрированных пользователей' });
         return;
       }
-      if (target.role === 'admin') {
+      const membership = store.membership(me.serverId, targetId);
+      if (!membership || membership.role === 'admin') {
         ack?.({ ok: false, error: 'Нельзя блокировать администратора' });
-        return;
-      }
-      if (me.role === 'moderator' && target.role === 'moderator') {
-        ack?.({ ok: false, error: 'Модератор не может блокировать модераторов' });
         return;
       }
       store.setBanned(targetId, Boolean(banned));
@@ -1519,7 +1825,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:deleteUser',
     safe(async ({ userId: targetId }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || me.role !== 'admin') {
+      if (!me?.serverId || me.role !== 'admin') {
         ack?.({ ok: false, error: 'Удалять аккаунты может только администратор' });
         return;
       }
@@ -1528,18 +1834,21 @@ io.on('connection', async (socket: AppSocket) => {
         return;
       }
       const target = store.userById(targetId);
-      if (!target) {
-        ack?.({ ok: false, error: 'Аккаунт не найден' });
+      const membership = store.membership(me.serverId, targetId);
+      if (!target || !membership) {
+        ack?.({ ok: false, error: 'Аккаунт не найден на этом сервере' });
         return;
       }
-      if (target.role === 'admin' && store.countAdmins() <= 1) {
+      if (membership.role === 'admin' && store.countAdmins(me.serverId) <= 1) {
         ack?.({ ok: false, error: 'Нельзя удалить последнего администратора' });
         return;
       }
       store.deleteUser(targetId);
       sessions.endAccount(targetId, 'Аккаунт удалён администратором');
-      emitGroups();
-      voice.onBroadcastGroupsChanged();
+      for (const server of store.servers()) {
+        emitGroups(server.id);
+        voice.onBroadcastGroupsChanged(server.id);
+      }
       sessions.broadcastUsers();
       ack?.({ ok: true });
     }),
@@ -1549,7 +1858,7 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:setRole',
     safe(async ({ userId: targetId, role }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || (me.role !== 'admin' && me.role !== 'moderator')) {
+      if (!me?.serverId || (me.role !== 'admin' && me.role !== 'moderator')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
@@ -1562,35 +1871,41 @@ io.on('connection', async (socket: AppSocket) => {
         ack?.({ ok: false, error: 'Некорректная роль' });
         return;
       }
+      const serverId = me.serverId;
       const target = store.userById(targetId);
-      if (!target) {
+      const membership = store.membership(serverId, targetId);
+      if (!target || !membership) {
         ack?.({ ok: false, error: 'Пользователь не найден' });
         return;
       }
-      if (me.role === 'moderator' && (target.role !== 'guest' || nextRole !== 'member')) {
+      if (me.role === 'moderator' && (membership.role !== 'guest' || nextRole !== 'member')) {
         ack?.({
           ok: false,
           error: 'Модератор может назначить гостю только роль Пользователь',
         });
         return;
       }
-      if (target.role === 'admin' && nextRole !== 'admin' && store.countAdmins() <= 1) {
+      if (membership.role === 'admin' && nextRole !== 'admin' && store.countAdmins(serverId) <= 1) {
         ack?.({ ok: false, error: 'Нельзя снять роль у последнего администратора' });
         return;
       }
-      if (target.role !== nextRole) {
-        store.setRole(targetId, nextRole);
-        if (sessions.hasAccount(targetId)) sessions.updateAccount(targetId, { role: nextRole });
-        else sessions.broadcastUsers();
-        for (const socket of sessions.socketsOf(targetId)) {
-          socket.emit('toast', {
+      if (membership.role !== nextRole) {
+        store.setRole(serverId, targetId, nextRole);
+        if (sessions.hasAccount(targetId)) {
+          sessions.updateAccountInServer(targetId, serverId, { role: nextRole }, false);
+        }
+        sessions.broadcastUsers();
+        for (const online of sessions.sessionsOf(targetId)) {
+          if (online.serverId !== serverId) continue;
+          sessions.getSocket(online.sessionId)?.emit('toast', {
             type: 'ok',
             text: `Ваша роль на сервере: ${BASE_ROLE_LABELS[nextRole]}`,
           });
         }
-        emitChannels();
-        emitGroups();
-        voice.onPermissionsChanged();
+        emitChannels(serverId);
+        emitGroups(serverId);
+        voice.onPermissionsChanged(serverId);
+        emitServers(targetId);
         await enforceChannelAccess();
       }
       ack?.({ ok: true });
@@ -1601,13 +1916,16 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:setLabel',
     safe(async ({ userId: targetId, label }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'moderate')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'moderate')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
-      const onlineTarget = sessions.sessionsOf(targetId)[0];
-      const storedTarget = store.userById(targetId);
-      if (!onlineTarget && !storedTarget) {
+      const serverId = me.serverId;
+      const onlineTarget = sessions
+        .sessionsOf(targetId)
+        .find((item) => item.serverId === serverId);
+      const membership = store.membership(serverId, targetId);
+      if (!onlineTarget && !membership) {
         ack?.({ ok: false, error: 'Пользователь не найден' });
         return;
       }
@@ -1615,12 +1933,11 @@ io.on('connection', async (socket: AppSocket) => {
         typeof label === 'string'
           ? label.replace(/[\r\n\t]+/g, ' ').trim().slice(0, MAX_LABEL_LENGTH)
           : '';
-      if (storedTarget) store.setLabel(targetId, text);
+      if (membership) store.setLabel(serverId, targetId, text);
       if (onlineTarget) {
-        sessions.updateAccount(targetId, { label: text || undefined });
-      } else {
-        sessions.broadcastUsers();
+        sessions.updateAccountInServer(targetId, serverId, { label: text || undefined }, false);
       }
+      sessions.broadcastUsers();
       ack?.({ ok: true });
     }),
   );
@@ -1629,31 +1946,32 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:setUserRoles',
     safe(async ({ userId: targetId, roleIds }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || !hasPermission(me, store.roles(), 'roles')) {
+      if (!me?.serverId || !hasPermission(me, rolesOf(me.serverId), 'roles')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
+      const serverId = me.serverId;
       const target = store.userById(targetId);
-      if (!target) {
+      if (!target || !store.membership(serverId, targetId)) {
         ack?.({ ok: false, error: 'Пользователь не найден' });
         return;
       }
       const requested = Array.isArray(roleIds)
         ? roleIds.filter((roleId: unknown): roleId is string => typeof roleId === 'string')
         : [];
-      const updated = store.setUserRoles(targetId, requested);
+      const updated = store.setUserRoles(serverId, targetId, requested);
       if (!updated) {
         ack?.({ ok: false, error: 'Пользователь не найден' });
         return;
       }
       if (sessions.hasAccount(targetId)) {
-        sessions.updateAccount(targetId, { roleIds: updated.roleIds });
-      } else {
-        sessions.broadcastUsers();
+        sessions.updateAccountInServer(targetId, serverId, { roleIds: updated.roleIds }, false);
       }
-      emitChannels();
-      emitGroups();
-      voice.onPermissionsChanged();
+      sessions.broadcastUsers();
+      emitChannels(serverId);
+      emitGroups(serverId);
+      voice.onPermissionsChanged(serverId);
+      emitServers(targetId);
       await enforceChannelAccess();
       ack?.({ ok: true });
     }),
@@ -1663,12 +1981,15 @@ io.on('connection', async (socket: AppSocket) => {
     'mod:authorizeGuest',
     safe(async ({ userId: targetId }, ack) => {
       const me = sessions.get(sessionId);
-      if (!me || (me.role !== 'admin' && me.role !== 'moderator')) {
+      if (!me?.serverId || (me.role !== 'admin' && me.role !== 'moderator')) {
         ack?.({ ok: false, error: 'Недостаточно прав' });
         return;
       }
-      const target = sessions.sessionsOf(targetId)[0];
-      if (!target || !target.isGuest) {
+      const serverId = me.serverId;
+      const target = sessions
+        .sessionsOf(targetId)
+        .find((item) => item.serverId === serverId && item.isGuest);
+      if (!target) {
         ack?.({ ok: false, error: 'Гость не найден в сети' });
         return;
       }
@@ -1676,34 +1997,46 @@ io.on('connection', async (socket: AppSocket) => {
         const result = await auth.authorizeGuest({
           id: target.id,
           displayName: target.displayName,
+          serverId,
         });
-        if (target.label) store.setLabel(targetId, target.label);
-        sessions.updateAccount(targetId, {
-          username: result.username,
-          role: result.account.role,
-          roleIds: [],
-          isGuest: false,
-        });
+        if (target.label) store.setLabel(serverId, targetId, target.label);
+        sessions.updateAccountInServer(
+          targetId,
+          serverId,
+          {
+            username: result.username,
+            role: result.account.role,
+            roleIds: [],
+            isGuest: false,
+          },
+          false,
+        );
         for (const [socketId, account] of socketAccounts) {
-          if (account.id === targetId) socketAccounts.set(socketId, result.account);
+          if (account.id === targetId && account.isGuest) {
+            socketAccounts.set(socketId, result.account);
+          }
         }
-        const targetSockets = sessions.socketsOf(targetId);
-        for (const targetSocket of targetSockets) targetSocket.emit('session:token', {
-          token: result.token,
-        });
+        const targetSockets = sessions
+          .sessionsOf(targetId)
+          .filter((item) => item.serverId === serverId)
+          .map((item) => sessions.getSocket(item.sessionId));
+        for (const targetSocket of targetSockets) {
+          targetSocket?.emit('session:token', { token: result.token });
+        }
         // После авторизации id аккаунта сохраняется, поэтому состояние то же.
         sessions.broadcastUsers();
         for (const targetSocket of targetSockets) {
-          const updated = sessions.get(targetSocket.id);
-          if (updated) targetSocket.emit('state:me', updated);
-          targetSocket.emit('toast', {
+          const updated = targetSocket ? sessions.get(targetSocket.id) : null;
+          if (targetSocket && updated) targetSocket.emit('state:me', updated);
+          targetSocket?.emit('toast', {
             type: 'ok',
             text: 'Вам назначена роль Пользователь — доступны каналы для участников',
           });
         }
-        emitChannels();
-        emitGroups();
-        voice.onPermissionsChanged();
+        emitChannels(serverId);
+        emitGroups(serverId);
+        voice.onPermissionsChanged(serverId);
+        emitServers(targetId);
         await enforceChannelAccess();
         ack?.({ ok: true, username: result.username, password: result.password });
       } catch (error) {

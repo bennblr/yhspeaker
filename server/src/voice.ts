@@ -7,7 +7,6 @@ import {
   type MediaKind,
   type OnlineUser,
   type ProducerSource,
-  type SpeakerInfo,
   type TransportParams,
 } from '@tsds/shared';
 import type { AppConfig } from './config.js';
@@ -18,6 +17,7 @@ import type { AppServer, AppSocket } from './types.js';
 interface ProducerMeta {
   sessionId: string;
   accountId: string;
+  serverId: string | null;
   channelId: string;
   source: ProducerSource;
   kind: MediaKind;
@@ -106,17 +106,35 @@ export class VoiceManager {
       interval: 200,
     });
 
+    // Индикатор речи не должен светиться у участников других серверов.
+    const emitSpeakers = (list: { meta: ProducerMeta; volume: number }[]): void => {
+      for (const listener of this.sessions.list()) {
+        const socket = this.sessions.getSocket(listener.sessionId);
+        if (!socket) continue;
+        socket.emit(
+          'voice:activeSpeakers',
+          list
+            .filter((item) => item.meta.serverId === listener.serverId)
+            .map((item) => ({
+              userId: item.meta.accountId,
+              sessionId: item.meta.sessionId,
+              volume: item.volume,
+            })),
+        );
+      }
+    };
+
     this.observer.on('volumes', (volumes) => {
-      const speakers: SpeakerInfo[] = [];
+      const speakers: { meta: ProducerMeta; volume: number }[] = [];
       for (const { producer, volume } of volumes) {
         const meta = this.producerMeta.get(producer.id);
         if (!meta || meta.source !== 'mic') continue;
-        speakers.push({ userId: meta.accountId, sessionId: meta.sessionId, volume });
+        speakers.push({ meta, volume });
       }
-      this.io.emit('voice:activeSpeakers', speakers);
+      emitSpeakers(speakers);
     });
     this.observer.on('silence', () => {
-      this.io.emit('voice:activeSpeakers', []);
+      emitSpeakers([]);
     });
 
     console.log(`[voice] mediasoup worker ${this.worker.pid} ready, router ${this.router.id}`);
@@ -180,6 +198,11 @@ export class VoiceManager {
     }
     const online = this.sessions.get(sessionId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
+    // Голос не пересекает границы серверов: канал чужого сервера не виден,
+    // даже если его идентификатор каким-то образом известен.
+    if (channel.serverId !== online.serverId) {
+      return { ok: false, error: 'Этот канал недоступен вам' };
+    }
     if (!isChannelVisible(online, channel)) {
       return { ok: false, error: 'Этот канал недоступен вам' };
     }
@@ -321,6 +344,7 @@ export class VoiceManager {
       const meta: ProducerMeta = {
         sessionId,
         accountId: online.id,
+        serverId: online.serverId,
         channelId: online.channelId,
         source,
         kind,
@@ -391,11 +415,14 @@ export class VoiceManager {
   ): Promise<AckResult> {
     const online = this.sessions.get(sessionId);
     if (!online) return { ok: false, error: 'Сессия не найдена' };
-    if (!hasPermission(online, this.store.roles(), 'broadcast')) {
+    const serverRoles = this.store.roles(online.serverId ?? '');
+    if (!hasPermission(online, serverRoles, 'broadcast')) {
       return { ok: false, error: 'Недостаточно прав для вещания во все каналы' };
     }
 
-    const knownGroups = new Set(this.store.broadcastGroups().map((group) => group.id));
+    const knownGroups = new Set(
+      this.store.broadcastGroups(online.serverId ?? '').map((group) => group.id),
+    );
     const groupIds = [...new Set(targets.groupIds)].filter((id) => knownGroups.has(id));
     if (targets.groupIds.length > 0 && groupIds.length === 0) {
       return { ok: false, error: 'Группы слушателей не найдены' };
@@ -427,10 +454,13 @@ export class VoiceManager {
   }
 
   // Пересчитывает аудиторию после изменения состава групп.
-  onBroadcastGroupsChanged(): void {
-    const knownGroups = new Set(this.store.broadcastGroups().map((group) => group.id));
+  onBroadcastGroupsChanged(serverId: string): void {
+    const knownGroups = new Set(
+      this.store.broadcastGroups(serverId).map((group) => group.id),
+    );
     let changed = false;
     for (const user of this.sessions.list()) {
+      if (user.serverId !== serverId) continue;
       if (!user.broadcastGroupIds.some((id) => !knownGroups.has(id))) continue;
       const groupIds = user.broadcastGroupIds.filter((id) => knownGroups.has(id));
       this.sessions.update(
@@ -450,10 +480,11 @@ export class VoiceManager {
   }
 
   // Останавливает вещание у тех, кто потерял право broadcast после смены ролей.
-  onPermissionsChanged(): void {
-    const roles = this.store.roles();
+  onPermissionsChanged(serverId: string): void {
+    const roles = this.store.roles(serverId);
     let changed = false;
     for (const user of this.sessions.list()) {
+      if (user.serverId !== serverId) continue;
       if (!user.broadcasting) continue;
       if (hasPermission(user, roles, 'broadcast')) continue;
       this.sessions.update(
@@ -467,12 +498,13 @@ export class VoiceManager {
     this.reconcileAll();
   }
 
-  // Серверный мут блокирует микрофон аккаунта на всех его устройствах.
-  async applyServerMute(userId: string, muted: boolean): Promise<void> {
+  // Серверный мут блокирует микрофон аккаунта на всех устройствах,
+  // открытых на том же сервере.
+  async applyServerMute(userId: string, serverId: string, muted: boolean): Promise<void> {
     if (!this.sessions.hasAccount(userId)) return;
-    this.sessions.updateAccount(userId, { serverMuted: muted });
+    this.sessions.updateAccountInServer(userId, serverId, { serverMuted: muted });
     for (const [producerId, meta] of this.producerMeta) {
-      if (meta.accountId !== userId || meta.source !== 'mic') continue;
+      if (meta.accountId !== userId || meta.serverId !== serverId || meta.source !== 'mic') continue;
       const producer = this.producers.get(producerId);
       if (!producer) continue;
       try {
@@ -576,33 +608,39 @@ export class VoiceManager {
             speaker.sessionId !== listener.sessionId &&
             speaker.id !== listener.id &&
             speaker.broadcasting &&
-            this.isBroadcastAudience(listener.id, speaker),
+            this.isBroadcastAudience(listener, speaker),
         )
         .map((speaker) => speaker.sessionId);
       socket.emit('voice:audience', { sessions });
     }
   }
 
-  private isBroadcastAudience(recipientId: string, speaker: OnlineUser): boolean {
+  private isBroadcastAudience(recipient: OnlineUser, speaker: OnlineUser): boolean {
     if (!speaker.broadcasting) return false;
+    // Вещание не выходит за пределы своего сервера.
+    if (recipient.serverId !== speaker.serverId) return false;
+    // Гости слышат только участников своего канала: вещание во все каналы
+    // и вещание на группы им недоступно.
+    if (recipient.role === 'guest') return false;
     if (speaker.broadcastAll) return true;
     if (speaker.broadcastGroupIds.length === 0) return false;
     return this.store
-      .broadcastGroups()
+      .broadcastGroups(speaker.serverId ?? '')
       .some(
         (group) =>
-          speaker.broadcastGroupIds.includes(group.id) && group.memberIds.includes(recipientId),
+          speaker.broadcastGroupIds.includes(group.id) && group.memberIds.includes(recipient.id),
       );
   }
 
   // Сессии, чьё приоритетное вещание слышит этот слушатель. Сам вещатель
   // (и его другие устройства) в список не попадает — ему остальных слышно.
-  private prioritySpeakersFor(peer: Peer): Set<string> {
+  private prioritySpeakersFor(peer: Peer, listener: OnlineUser): Set<string> {
     const result = new Set<string>();
     for (const user of this.sessions.list()) {
+      if (user.serverId !== listener.serverId) continue;
       if (!user.broadcasting || !user.broadcastPriority) continue;
       if (user.id === peer.accountId) continue;
-      if (!this.isBroadcastAudience(peer.accountId, user)) continue;
+      if (!this.isBroadcastAudience(listener, user)) continue;
       result.add(user.sessionId);
     }
     return result;
@@ -613,7 +651,7 @@ export class VoiceManager {
     const online = this.sessions.get(peer.sessionId);
     if (!online?.channelId) return;
 
-    const prioritySpeakers = this.prioritySpeakersFor(peer);
+    const prioritySpeakers = this.prioritySpeakersFor(peer, online);
     const desired = new Set<string>();
     for (const [producerId, meta] of this.producerMeta) {
       // свои же устройства не слышим, чтобы не было эха
@@ -635,7 +673,7 @@ export class VoiceManager {
       if (
         meta.source === 'mic' &&
         speaker?.broadcasting &&
-        this.isBroadcastAudience(peer.accountId, speaker)
+        this.isBroadcastAudience(online, speaker)
       ) {
         desired.add(producerId);
       }

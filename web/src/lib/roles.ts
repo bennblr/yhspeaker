@@ -43,6 +43,11 @@ export const PERMISSION_META: { key: PermissionKey; label: string; hint: string 
   { key: 'roles', label: 'Роли', hint: 'Создавать роли и выдавать их участникам' },
   { key: 'groups', label: 'Группы', hint: 'Настраивать группы слушателей вещания' },
   { key: 'invite', label: 'Приглашения', hint: 'Смотреть и перегенерировать гостевой код' },
+  {
+    key: 'createServer',
+    label: 'Свои серверы',
+    hint: 'Создавать собственные серверы внутри приложения',
+  },
 ];
 
 export const ROLE_COLORS = [

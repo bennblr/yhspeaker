@@ -14,6 +14,8 @@ export interface Account {
   roleIds: string[];
   isGuest: boolean;
   banned: boolean;
+  // Активный сервер подключения. Роль и роли-права относятся именно к нему.
+  serverId: string | null;
 }
 
 interface TokenPayload {
@@ -50,25 +52,31 @@ export function verifyChannelPassword(password: string, hash: string): Promise<b
   return comparePassword(password, hash);
 }
 
-function accountFromStored(user: StoredUser): Account {
-  return {
-    id: user.id,
-    username: user.username,
-    displayName: user.displayName,
-    label: user.label,
-    role: user.role,
-    roleIds: [...user.roleIds],
-    isGuest: false,
-    banned: user.banned,
-  };
-}
-
 export class AuthService {
   constructor(
     private readonly store: Store,
     private readonly config: AppConfig,
     private readonly isNameTaken: (name: string) => boolean,
   ) {}
+
+  // Аккаунт сам по себе не хранит роль: она берётся из членства на сервере.
+  accountFor(user: StoredUser, serverId?: string): Account {
+    const target = serverId && this.store.membership(serverId, user.id)
+      ? serverId
+      : this.store.preferredServerId(user.id) ?? null;
+    const membership = target ? this.store.membership(target, user.id) : undefined;
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      label: membership?.label,
+      role: membership?.role ?? 'guest',
+      roleIds: membership ? [...membership.roleIds] : [],
+      isGuest: false,
+      banned: user.banned,
+      serverId: target,
+    };
+  }
 
   private sign(payload: TokenPayload, expiresIn: string): string {
     return jwt.sign(payload, this.config.jwtSecret, { expiresIn } as jwt.SignOptions);
@@ -109,7 +117,7 @@ export class AuthService {
 
     const passwordHash = await hashPassword(input.password);
     const user = this.store.createUser({ username, displayName, passwordHash });
-    const account = accountFromStored(user);
+    const account = this.accountFor(user);
     return { token: this.issueToken(account), account };
   }
 
@@ -122,7 +130,7 @@ export class AuthService {
     const valid = await comparePassword(input.password, user.passwordHash);
     if (!valid) throw new Error('Неверный логин или пароль');
     if (user.banned) throw new Error('Аккаунт заблокирован администратором');
-    const account = accountFromStored(user);
+    const account = this.accountFor(user);
     return { token: this.issueToken(account), account };
   }
 
@@ -154,6 +162,8 @@ export class AuthService {
       roleIds: [],
       isGuest: true,
       banned: false,
+      // Гость входит только на основной сервер: списка серверов у него нет.
+      serverId: this.store.defaultServerId(),
     };
     return { token: this.issueToken(account), account };
   }
@@ -166,7 +176,7 @@ export class AuthService {
       const user = this.store.userById(payload.sub);
       if (user) {
         if (user.banned) return null;
-        return accountFromStored(user);
+        return this.accountFor(user);
       }
       if (payload.kind !== 'guest' || !payload.displayName) return null;
       return {
@@ -177,6 +187,7 @@ export class AuthService {
         roleIds: [],
         isGuest: true,
         banned: false,
+        serverId: this.store.defaultServerId(),
       };
     } catch {
       return null;
@@ -199,7 +210,7 @@ export class AuthService {
     return candidate;
   }
 
-  async authorizeGuest(input: { id: string; displayName: string }): Promise<{
+  async authorizeGuest(input: { id: string; displayName: string; serverId: string }): Promise<{
     token: string;
     account: Account;
     username: string;
@@ -215,8 +226,8 @@ export class AuthService {
       username,
       displayName: input.displayName,
       passwordHash,
-    });
-    const account = accountFromStored(user);
+    }, input.serverId);
+    const account = this.accountFor(user, input.serverId);
     return { token: this.issueToken(account), account, username, password };
   }
 }

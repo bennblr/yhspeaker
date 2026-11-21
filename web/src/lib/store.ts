@@ -10,6 +10,7 @@ import type {
   InitState,
   OnlineUser,
   Role,
+  ServerSummary,
 } from '@tsds/shared';
 import { loadSettings, saveSettings, MAX_USER_VOLUME, type MicSettings } from './settings';
 import {
@@ -54,6 +55,10 @@ export interface AppState {
   broadcastGroups: BroadcastGroup[];
   roles: Role[];
   config: ClientConfig | null;
+  // Серверы, доступные аккаунту, и тот, который открыт в этом окне.
+  servers: ServerSummary[];
+  serverId: string | null;
+  serverName: string | null;
   connection: 'connecting' | 'online' | 'offline';
   activeChannelId: string | null;
   unlockedChannels: string[];
@@ -90,6 +95,7 @@ export interface AppState {
   applyChannels: (channels: Channel[]) => void;
   setBroadcastGroups: (groups: BroadcastGroup[]) => void;
   setRoles: (roles: Role[]) => void;
+  setServers: (servers: ServerSummary[]) => void;
   setConnection: (connection: AppState['connection']) => void;
   setActiveChannel: (channelId: string) => void;
   markChannelUnlocked: (channelId: string) => void;
@@ -184,6 +190,9 @@ export const useApp = create<AppState>((set, get) => ({
   broadcastGroups: [],
   roles: [],
   config: null,
+  servers: [],
+  serverId: null,
+  serverName: null,
   connection: 'connecting',
   activeChannelId: lastChannel,
   unlockedChannels: [],
@@ -223,7 +232,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   applyInit: (state) => {
-    const current = get().activeChannelId;
+    const previous = get();
+    const serverId = state.server?.id ?? null;
+    const serverChanged = previous.serverId !== null && previous.serverId !== serverId;
+    const current = serverChanged ? null : previous.activeChannelId;
     const unlockedChannels: string[] = [];
     const activeChannelId = pickDefaultChannel(
       state.channels,
@@ -241,6 +253,9 @@ export const useApp = create<AppState>((set, get) => ({
       broadcastGroups: state.broadcastGroups ?? [],
       roles: state.roles ?? [],
       config: state.config,
+      servers: state.servers ?? [],
+      serverId,
+      serverName: state.server?.name ?? null,
       connection: 'online',
       activeChannelId,
       unlockedChannels,
@@ -248,6 +263,14 @@ export const useApp = create<AppState>((set, get) => ({
       messageCounts: state.messageCounts ?? {},
       sidebarCollapsed: prefs.collapsed,
       channelOrder: prefs.order,
+      ...(serverChanged
+        ? {
+            unread: {},
+            speaking: [],
+            speakingAll: [],
+            audibleBroadcasters: [],
+          }
+        : {}),
     });
   },
 
@@ -287,6 +310,8 @@ export const useApp = create<AppState>((set, get) => ({
   setBroadcastGroups: (broadcastGroups) => set({ broadcastGroups }),
 
   setRoles: (roles) => set({ roles }),
+
+  setServers: (servers) => set({ servers }),
 
   setConnection: (connection) => set({ connection }),
 
@@ -515,6 +540,9 @@ export const useApp = create<AppState>((set, get) => ({
       broadcastGroups: [],
       roles: [],
       config: null,
+      servers: [],
+      serverId: null,
+      serverName: null,
       connection: 'connecting',
       activeChannelId: null,
       unlockedChannels: [],

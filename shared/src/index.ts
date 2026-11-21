@@ -26,7 +26,8 @@ export type PermissionKey =
   | 'channels'
   | 'roles'
   | 'groups'
-  | 'invite';
+  | 'invite'
+  | 'createServer';
 
 export interface RolePermissions {
   broadcast: boolean;
@@ -35,6 +36,9 @@ export interface RolePermissions {
   roles: boolean;
   groups: boolean;
   invite: boolean;
+  // Право создавать собственные серверы. Выдаётся администратором,
+  // поэтому новый сервер появляется только по приглашению.
+  createServer: boolean;
 }
 
 export interface Role {
@@ -52,6 +56,7 @@ export const NO_PERMISSIONS: RolePermissions = {
   roles: false,
   groups: false,
   invite: false,
+  createServer: false,
 };
 
 export function hasPermission(
@@ -80,6 +85,7 @@ export function hasAnyPermission(
 
 export interface Channel {
   id: string;
+  serverId: string;
   name: string;
   type: ChannelType;
   guest?: boolean;
@@ -113,6 +119,9 @@ export interface OnlineUser {
   id: string;
   // Идентификатор подключения: у одного аккаунта может быть несколько устройств.
   sessionId: string;
+  // Сервер, на котором сейчас открыт этот клиент. Устройства одного аккаунта
+  // могут смотреть разные серверы одновременно.
+  serverId: string | null;
   device: DeviceKind;
   deviceName: string;
   username: string;
@@ -205,6 +214,21 @@ export interface ClientConfig extends PublicServerConfig {
   maxMessageLength: number;
 }
 
+// Сервер в списке аккаунта: у каждого он свой, роль тоже вычисляется
+// по членству, а не по аккаунту целиком.
+export interface ServerSummary {
+  id: string;
+  name: string;
+  ownerId: string;
+  role: BaseRole;
+  memberCount: number;
+  // Может ли этот аккаунт создать ещё один сервер (право выдано в любой из ролей).
+  canCreate: boolean;
+  // Код приглашения виден только тем, у кого есть право приглашать.
+  inviteCode?: string;
+  createdAt: number;
+}
+
 export interface InitState {
   me: OnlineUser;
   users: OnlineUser[];
@@ -215,6 +239,9 @@ export interface InitState {
   config: ClientConfig;
   // Количество сохранённых сообщений по каналам: сервер хранит только хвост истории.
   messageCounts?: Record<string, number>;
+  // Активный сервер подключения и все серверы, где состоит аккаунт.
+  server: { id: string; name: string } | null;
+  servers: ServerSummary[];
 }
 
 export interface TransportParams {
@@ -417,10 +444,15 @@ export interface AuthorizeGuestResult extends AckResult {
   password?: string;
 }
 
+export interface ServerActionResult extends AckResult {
+  serverId?: string;
+}
+
 export interface ServerToClientEvents {
   'state:init': (state: InitState) => void;
   'state:me': (me: OnlineUser) => void;
   'state:users': (users: OnlineUser[]) => void;
+  'servers:update': (servers: ServerSummary[]) => void;
   'channels:update': (channels: Channel[]) => void;
   'groups:update': (groups: BroadcastGroup[]) => void;
   'roles:update': (roles: Role[]) => void;
@@ -443,6 +475,24 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
+  // Переключение активного сервера без переподключения: сервер присылает
+  // свежий state:init, клиент пересобирает интерфейс.
+  'server:select': (
+    payload: { serverId: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
+  'server:create': (
+    payload: { name: string },
+    ack?: (res: ServerActionResult) => void,
+  ) => void;
+  'server:join': (
+    payload: { code: string },
+    ack?: (res: ServerActionResult) => void,
+  ) => void;
+  'server:leave': (
+    payload: { serverId: string },
+    ack?: (res: AckResult) => void,
+  ) => void;
   'chat:send': (
     payload: { channelId: string; text: string },
     ack?: (res: AckResult) => void,

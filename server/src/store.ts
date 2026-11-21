@@ -13,22 +13,42 @@ import type {
   Role,
   RolePermissions,
 } from '@tsds/shared';
-import { BASE_ROLES } from '@tsds/shared';
+import { BASE_ROLES, NO_PERMISSIONS } from '@tsds/shared';
 
+// Аккаунт общий для всего сервиса: один логин и пароль, а серверы — это
+// пространства внутри него, как в Discord. Роль, метка и набор ролей живут
+// в членстве конкретного сервера.
 export interface StoredUser {
   id: string;
   username: string;
   displayName: string;
-  label?: string;
   passwordHash: string;
-  role: BaseRole;
-  roleIds: string[];
   banned: boolean;
   createdAt: number;
+  // Сервер, который аккаунт открывал последним: его показываем при входе.
+  lastServerId?: string;
+}
+
+export interface StoredServer {
+  id: string;
+  name: string;
+  ownerId: string;
+  inviteCode: string;
+  createdAt: number;
+}
+
+export interface StoredMembership {
+  serverId: string;
+  userId: string;
+  role: BaseRole;
+  roleIds: string[];
+  label?: string;
+  joinedAt: number;
 }
 
 export interface StoredChannel {
   id: string;
+  serverId: string;
   name: string;
   type: ChannelType;
   guest?: boolean;
@@ -36,6 +56,14 @@ export interface StoredChannel {
   visibleRoles: BaseRole[];
   visibleRoleIds: string[];
   createdAt: number;
+}
+
+export interface StoredRole extends Role {
+  serverId: string;
+}
+
+export interface StoredBroadcastGroup extends BroadcastGroup {
+  serverId: string;
 }
 
 // Подписка браузера на Web Push. Endpoint уникален для установленного PWA
@@ -57,13 +85,16 @@ export interface StoredFcmToken {
 }
 
 interface StoreData {
-  version: 1;
+  version: 2;
   guestInviteCode: string;
   guestInviteRequired: boolean;
+  servers: StoredServer[];
+  // serverId -> userId -> членство.
+  memberships: Record<string, Record<string, StoredMembership>>;
   users: StoredUser[];
   channels: StoredChannel[];
-  broadcastGroups: BroadcastGroup[];
-  roles: Role[];
+  broadcastGroups: StoredBroadcastGroup[];
+  roles: StoredRole[];
   messages: Record<string, ChatMessage[]>;
   // Личные сообщения: ключ — пара идентификаторов аккаунтов в стабильном порядке.
   directMessages: Record<string, DirectMessage[]>;
@@ -78,29 +109,26 @@ function conversationKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
-function emptyData(guestInviteCode: string, guestInviteRequired: boolean): StoreData {
-  return {
-    version: 1,
-    guestInviteCode,
-    guestInviteRequired,
-    users: [],
-    channels: [],
-    broadcastGroups: [],
-    roles: [],
-    messages: {},
-    directMessages: {},
-    pushSubscriptions: {},
-    fcmTokens: {},
-  };
+function inviteCode(): string {
+  return crypto.randomBytes(4).toString('hex');
 }
 
-function seedChannels(): StoredChannel[] {
+function serverSeedChannels(serverId: string): StoredChannel[] {
   const now = Date.now();
   return [
-    { id: crypto.randomUUID(), name: 'Общий', type: 'voice', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
-    { id: crypto.randomUUID(), name: 'Вторая комната', type: 'voice', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
-    { id: crypto.randomUUID(), name: 'Общий чат', type: 'text', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
+    { id: crypto.randomUUID(), serverId, name: 'Общий', type: 'voice', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
+    { id: crypto.randomUUID(), serverId, name: 'Общий чат', type: 'text', visibleRoles: [...BASE_ROLES], visibleRoleIds: [], createdAt: now },
   ];
+}
+
+function makeServer(name: string, ownerId: string): StoredServer {
+  return {
+    id: crypto.randomUUID(),
+    name: name.trim().slice(0, 40) || 'Новый сервер',
+    ownerId,
+    inviteCode: inviteCode(),
+    createdAt: Date.now(),
+  };
 }
 
 export class Store {
@@ -112,26 +140,175 @@ export class Store {
     dataDir: string,
     private readonly envInviteCode: string,
     private readonly envInviteRequired: boolean,
+    private readonly defaultServerName: string,
   ) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.file = path.join(dataDir, 'store.json');
 
     if (fs.existsSync(this.file)) {
       try {
-        this.data = JSON.parse(fs.readFileSync(this.file, 'utf8')) as StoreData;
+        this.data = this.read(JSON.parse(fs.readFileSync(this.file, 'utf8')) as unknown);
       } catch (error) {
         throw new Error(`Не удалось прочитать ${this.file}: ${(error as Error).message}`);
       }
     } else {
-      this.data = emptyData(crypto.randomBytes(4).toString('hex'), envInviteRequired);
+      this.data = this.freshData();
       this.saveNow();
     }
 
-    if (!Array.isArray(this.data.channels) || this.data.channels.length === 0) {
-      this.data.channels = seedChannels();
+    this.normalize();
+    this.saveNow();
+  }
+
+  // ---------- загрузка и миграция ----------
+
+  private freshData(): StoreData {
+    const server = makeServer(this.defaultServerName, '');
+    return {
+      version: 2,
+      guestInviteCode: inviteCode(),
+      guestInviteRequired: this.envInviteRequired,
+      servers: [server],
+      memberships: { [server.id]: {} },
+      users: [],
+      channels: serverSeedChannels(server.id),
+      broadcastGroups: [],
+      roles: [],
+      messages: {},
+      directMessages: {},
+      pushSubscriptions: {},
+      fcmTokens: {},
+    };
+  }
+
+  private read(raw: unknown): StoreData {
+    const record = (raw ?? {}) as Record<string, unknown>;
+    if (record.version === 2 && Array.isArray(record.servers)) {
+      return record as unknown as StoreData;
     }
-    this.ensureGuestChannel();
+    return this.migrateLegacy(record);
+  }
+
+  // Старое хранилище было одним сервером: оборачиваем его данные в первый
+  // сервер, а роли и метки участников переносим в членство.
+  private migrateLegacy(raw: Record<string, unknown>): StoreData {
+    const legacyUsers = Array.isArray(raw.users) ? (raw.users as Record<string, unknown>[]) : [];
+    const legacyChannels = Array.isArray(raw.channels)
+      ? (raw.channels as Record<string, unknown>[])
+      : [];
+    const legacyRoles = Array.isArray(raw.roles) ? (raw.roles as Record<string, unknown>[]) : [];
+    const legacyGroups = Array.isArray(raw.broadcastGroups)
+      ? (raw.broadcastGroups as Record<string, unknown>[])
+      : [];
+
+    const owner =
+      legacyUsers.find((user) => user.role === 'admin')?.id ?? legacyUsers[0]?.id ?? '';
+    const server = makeServer(this.defaultServerName, String(owner));
+    const memberships: Record<string, StoredMembership> = {};
+    const users: StoredUser[] = legacyUsers.map((user) => {
+      const id = String(user.id);
+      const joinedAt = Number(user.createdAt) || Date.now();
+      memberships[id] = {
+        serverId: server.id,
+        userId: id,
+        role: (user.role as BaseRole) ?? 'guest',
+        roleIds: Array.isArray(user.roleIds) ? (user.roleIds as string[]) : [],
+        joinedAt,
+      };
+      if (typeof user.label === 'string' && user.label.trim()) {
+        memberships[id].label = user.label.trim();
+      }
+      return {
+        id,
+        username: String(user.username ?? ''),
+        displayName: String(user.displayName ?? user.username ?? ''),
+        passwordHash: String(user.passwordHash ?? ''),
+        banned: Boolean(user.banned),
+        createdAt: joinedAt,
+      };
+    });
+
+    const channels: StoredChannel[] = legacyChannels.map((channel) => ({
+      ...(channel as unknown as StoredChannel),
+      serverId: server.id,
+      visibleRoles: Array.isArray(channel.visibleRoles)
+        ? (channel.visibleRoles as BaseRole[])
+        : [...BASE_ROLES],
+      visibleRoleIds: Array.isArray(channel.visibleRoleIds)
+        ? (channel.visibleRoleIds as string[])
+        : [],
+    }));
+
+    return {
+      version: 2,
+      guestInviteCode:
+        typeof raw.guestInviteCode === 'string' && raw.guestInviteCode
+          ? raw.guestInviteCode
+          : inviteCode(),
+      guestInviteRequired:
+        typeof raw.guestInviteRequired === 'boolean'
+          ? raw.guestInviteRequired
+          : this.envInviteRequired,
+      servers: [server],
+      memberships: { [server.id]: memberships },
+      users,
+      channels: channels.length ? channels : serverSeedChannels(server.id),
+      broadcastGroups: legacyGroups.map((group) => ({
+        ...(group as unknown as BroadcastGroup),
+        serverId: server.id,
+      })),
+      roles: legacyRoles.map((role) => ({
+        ...(role as unknown as Role),
+        serverId: server.id,
+      })),
+      messages: (raw.messages as Record<string, ChatMessage[]>) ?? {},
+      directMessages: (raw.directMessages as Record<string, DirectMessage[]>) ?? {},
+      pushSubscriptions: (raw.pushSubscriptions as Record<string, StoredPushSubscription[]>) ?? {},
+      fcmTokens: (raw.fcmTokens as Record<string, StoredFcmToken[]>) ?? {},
+    };
+  }
+
+  private normalize(): void {
+    this.data.servers ??= [];
+    this.data.users ??= [];
+    this.data.channels ??= [];
+    this.data.broadcastGroups ??= [];
+    this.data.roles ??= [];
+    this.data.messages ??= {};
+    this.data.directMessages ??= {};
+    this.data.pushSubscriptions ??= {};
+    this.data.fcmTokens ??= {};
+    this.data.memberships ??= {};
+    if (typeof this.data.guestInviteRequired !== 'boolean') {
+      this.data.guestInviteRequired = this.envInviteRequired;
+    }
+    if (!this.data.guestInviteCode) this.data.guestInviteCode = inviteCode();
+
+    if (this.data.servers.length === 0) {
+      const server = makeServer(this.defaultServerName, '');
+      this.data.servers.push(server);
+      this.data.memberships[server.id] = {};
+      this.data.channels.push(...serverSeedChannels(server.id));
+    }
+    const fallbackServerId = this.data.servers[0].id;
+
+    for (const server of this.data.servers) {
+      server.name = server.name?.trim() || this.defaultServerName;
+      if (!server.inviteCode) server.inviteCode = inviteCode();
+      this.data.memberships[server.id] ??= {};
+      for (const [userId, membership] of Object.entries(this.data.memberships[server.id])) {
+        membership.serverId ??= server.id;
+        membership.userId ??= userId;
+        membership.roleIds ??= [];
+      }
+    }
+
+    for (const user of this.data.users) {
+      if (user.lastServerId && !this.serverById(user.lastServerId)) delete user.lastServerId;
+    }
+
     for (const channel of this.data.channels) {
+      channel.serverId ??= fallbackServerId;
       if (!Array.isArray(channel.visibleRoles)) {
         channel.visibleRoles = channel.guest
           ? [...BASE_ROLES]
@@ -139,23 +316,13 @@ export class Store {
       }
       channel.visibleRoleIds ??= [];
     }
-    this.data.users ??= [];
-    this.data.broadcastGroups ??= [];
-    this.data.roles ??= [];
-    this.data.messages ??= {};
-    this.data.directMessages ??= {};
-    this.data.pushSubscriptions ??= {};
-    this.data.fcmTokens ??= {};
-    if (typeof this.data.guestInviteRequired !== 'boolean') {
-      this.data.guestInviteRequired = envInviteRequired;
+    for (const role of this.data.roles) {
+      role.serverId ??= fallbackServerId;
+      role.permissions = { ...NO_PERMISSIONS, ...(role.permissions ?? {}) };
     }
-    for (const user of this.data.users) {
-      user.roleIds ??= [];
-    }
-    if (!this.data.guestInviteCode) {
-      this.data.guestInviteCode = crypto.randomBytes(4).toString('hex');
-    }
-    this.saveNow();
+    for (const group of this.data.broadcastGroups) group.serverId ??= fallbackServerId;
+
+    this.ensureGuestChannel(fallbackServerId);
   }
 
   get inviteCode(): string {
@@ -173,20 +340,23 @@ export class Store {
   }
 
   regenerateInviteCode(): string {
-    this.data.guestInviteCode = crypto.randomBytes(4).toString('hex');
+    this.data.guestInviteCode = inviteCode();
     this.saveNow();
     return this.inviteCode;
   }
 
-  private ensureGuestChannel(): void {
-    const guest = this.data.channels.find((channel) => channel.guest);
+  // Гостевой канал нужен только на основном сервере: гости попадают туда
+  // и не выбирают серверы.
+  private ensureGuestChannel(serverId: string): void {
+    const channels = this.data.channels.filter((channel) => channel.serverId === serverId);
+    const guest = channels.find((channel) => channel.guest);
     if (guest) {
       delete guest.passwordHash;
       guest.visibleRoles = [...BASE_ROLES];
       guest.visibleRoleIds = [];
       return;
     }
-    const existing = this.data.channels.find(
+    const existing = channels.find(
       (channel) => channel.type === 'voice' && channel.name.trim().toLowerCase() === 'гостевая',
     );
     if (existing) {
@@ -198,6 +368,7 @@ export class Store {
     }
     this.data.channels.unshift({
       id: crypto.randomUUID(),
+      serverId,
       name: 'Гостевая',
       type: 'voice',
       guest: true,
@@ -229,7 +400,168 @@ export class Store {
     this.saveNow();
   }
 
-  // --- users ---
+  // ---------- серверы ----------
+
+  servers(): StoredServer[] {
+    return this.data.servers;
+  }
+
+  serverById(id: string | null | undefined): StoredServer | undefined {
+    if (!id) return undefined;
+    return this.data.servers.find((server) => server.id === id);
+  }
+
+  defaultServerId(): string {
+    return this.data.servers[0].id;
+  }
+
+  serverByInviteCode(code: string): StoredServer | undefined {
+    const normalized = code.trim().toLowerCase();
+    if (!normalized) return undefined;
+    return this.data.servers.find((server) => server.inviteCode.toLowerCase() === normalized);
+  }
+
+  createServer(name: string, ownerId: string): StoredServer {
+    const server = makeServer(name, ownerId);
+    this.data.servers.push(server);
+    this.data.memberships[server.id] = {};
+    if (ownerId) {
+      this.addMembership(server.id, ownerId, 'admin');
+      const user = this.userById(ownerId);
+      if (user) user.lastServerId = server.id;
+    }
+    this.data.channels.push(...serverSeedChannels(server.id));
+    this.saveNow();
+    return server;
+  }
+
+  regenerateServerInvite(serverId: string): string | undefined {
+    const server = this.serverById(serverId);
+    if (!server) return undefined;
+    server.inviteCode = inviteCode();
+    this.saveNow();
+    return server.inviteCode;
+  }
+
+  deleteServer(serverId: string): boolean {
+    if (serverId === this.defaultServerId()) return false;
+    if (!this.serverById(serverId)) return false;
+    this.data.servers = this.data.servers.filter((server) => server.id !== serverId);
+    delete this.data.memberships[serverId];
+    const channelIds = new Set(
+      this.data.channels.filter((channel) => channel.serverId === serverId).map((channel) => channel.id),
+    );
+    this.data.channels = this.data.channels.filter((channel) => channel.serverId !== serverId);
+    this.data.roles = this.data.roles.filter((role) => role.serverId !== serverId);
+    this.data.broadcastGroups = this.data.broadcastGroups.filter(
+      (group) => group.serverId !== serverId,
+    );
+    for (const channelId of channelIds) delete this.data.messages[channelId];
+    for (const user of this.data.users) {
+      if (user.lastServerId === serverId) delete user.lastServerId;
+    }
+    this.saveNow();
+    return true;
+  }
+
+  // ---------- членство и аккаунты ----------
+
+  membership(serverId: string | null | undefined, userId: string): StoredMembership | undefined {
+    if (!serverId) return undefined;
+    return this.data.memberships[serverId]?.[userId];
+  }
+
+  membershipsOf(userId: string): StoredMembership[] {
+    const result: StoredMembership[] = [];
+    for (const server of this.data.servers) {
+      const membership = this.data.memberships[server.id]?.[userId];
+      if (membership) result.push(membership);
+    }
+    return result;
+  }
+
+  serversOf(userId: string): StoredServer[] {
+    return this.data.servers.filter((server) => Boolean(this.data.memberships[server.id]?.[userId]));
+  }
+
+  preferredServerId(userId: string): string | undefined {
+    const user = this.userById(userId);
+    const last = user?.lastServerId;
+    if (last && this.membership(last, userId)) return last;
+    return this.serversOf(userId)[0]?.id;
+  }
+
+  setLastServer(userId: string, serverId: string): void {
+    const user = this.userById(userId);
+    if (!user || !this.membership(serverId, userId)) return;
+    user.lastServerId = serverId;
+    this.saveSoon();
+  }
+
+  memberIds(serverId: string): string[] {
+    return Object.keys(this.data.memberships[serverId] ?? {});
+  }
+
+  serverMembers(serverId: string): StoredUser[] {
+    const ids = new Set(this.memberIds(serverId));
+    return this.data.users.filter((user) => ids.has(user.id));
+  }
+
+  // Аккаунты, с которыми у пользователя есть хотя бы один общий сервер:
+  // только им можно писать в личные сообщения.
+  sharedServerUserIds(userId: string): Set<string> {
+    const result = new Set<string>();
+    for (const membership of this.membershipsOf(userId)) {
+      for (const id of this.memberIds(membership.serverId)) result.add(id);
+    }
+    return result;
+  }
+
+  private addMembership(serverId: string, userId: string, role: BaseRole): StoredMembership {
+    const map = (this.data.memberships[serverId] ??= {});
+    const existing = map[userId];
+    if (existing) return existing;
+    const membership: StoredMembership = {
+      serverId,
+      userId,
+      role,
+      roleIds: [],
+      joinedAt: Date.now(),
+    };
+    map[userId] = membership;
+    return membership;
+  }
+
+  addMember(serverId: string, userId: string, role: BaseRole = 'member'): StoredMembership | undefined {
+    if (!this.serverById(serverId) || !this.userById(userId)) return undefined;
+    const membership = this.addMembership(serverId, userId, role);
+    this.saveNow();
+    return membership;
+  }
+
+  removeMember(serverId: string, userId: string): boolean {
+    const map = this.data.memberships[serverId];
+    if (!map?.[userId]) return false;
+    delete map[userId];
+    const server = this.serverById(serverId);
+    if (server?.ownerId === userId) {
+      const next = Object.values(map).sort((a, b) => a.joinedAt - b.joinedAt)[0];
+      if (next) {
+        server.ownerId = next.userId;
+        next.role = 'admin';
+      } else {
+        this.deleteServer(serverId);
+      }
+    }
+    for (const group of this.data.broadcastGroups) {
+      if (group.serverId !== serverId) continue;
+      group.memberIds = group.memberIds.filter((id) => id !== userId);
+    }
+    const user = this.userById(userId);
+    if (user?.lastServerId === serverId) delete user.lastServerId;
+    this.saveNow();
+    return true;
+  }
 
   users(): StoredUser[] {
     return this.data.users;
@@ -252,6 +584,8 @@ export class Store {
     );
   }
 
+  // Регистрация входит на основной сервер: первый аккаунт становится его
+  // владельцем, остальные получают роль гостя до подтверждения.
   createUser(input: {
     username: string;
     displayName: string;
@@ -262,33 +596,42 @@ export class Store {
       username: input.username,
       displayName: input.displayName,
       passwordHash: input.passwordHash,
-      role: this.data.users.length === 0 ? 'admin' : 'guest',
-      roleIds: [],
       banned: false,
       createdAt: Date.now(),
     };
     this.data.users.push(user);
+    const server = this.data.servers[0];
+    let role: BaseRole = 'guest';
+    if (!server.ownerId) {
+      server.ownerId = user.id;
+      role = 'admin';
+    }
+    this.addMembership(server.id, user.id, role);
+    user.lastServerId = server.id;
     this.saveNow();
     return user;
   }
 
-  createAuthorizedUser(input: {
-    id: string;
-    username: string;
-    displayName: string;
-    passwordHash: string;
-  }): StoredUser {
+  createAuthorizedUser(
+    input: {
+      id: string;
+      username: string;
+      displayName: string;
+      passwordHash: string;
+    },
+    serverId: string,
+  ): StoredUser {
     const user: StoredUser = {
       id: input.id,
       username: input.username,
       displayName: input.displayName,
       passwordHash: input.passwordHash,
-      role: 'member',
-      roleIds: [],
       banned: false,
       createdAt: Date.now(),
     };
     this.data.users.push(user);
+    this.addMembership(serverId, user.id, 'member');
+    user.lastServerId = serverId;
     this.saveNow();
     return user;
   }
@@ -301,14 +644,6 @@ export class Store {
     return user;
   }
 
-  setRole(id: string, role: BaseRole): StoredUser | undefined {
-    const user = this.userById(id);
-    if (!user) return undefined;
-    user.role = role;
-    this.saveNow();
-    return user;
-  }
-
   renameUser(id: string, displayName: string): StoredUser | undefined {
     const user = this.userById(id);
     if (!user) return undefined;
@@ -317,20 +652,31 @@ export class Store {
     return user;
   }
 
-  setLabel(id: string, label: string): StoredUser | undefined {
-    const user = this.userById(id);
-    if (!user) return undefined;
-    const trimmed = label.trim();
-    if (trimmed) user.label = trimmed;
-    else delete user.label;
-    this.saveNow();
-    return user;
-  }
-
   deleteUser(id: string): boolean {
     const before = this.data.users.length;
     this.data.users = this.data.users.filter((u) => u.id !== id);
     if (this.data.users.length === before) return false;
+
+    for (const server of [...this.data.servers]) {
+      const map = this.data.memberships[server.id];
+      if (!map?.[id]) continue;
+      if (server.ownerId === id) {
+        const next = Object.values(map)
+          .filter((membership) => membership.userId !== id)
+          .sort((a, b) => a.joinedAt - b.joinedAt)[0];
+        if (next) {
+          server.ownerId = next.userId;
+          next.role = 'admin';
+        } else if (server.id !== this.defaultServerId()) {
+          this.deleteServer(server.id);
+          continue;
+        } else {
+          server.ownerId = '';
+        }
+      }
+      delete map[id];
+    }
+
     for (const group of this.data.broadcastGroups) {
       group.memberIds = group.memberIds.filter((memberId) => memberId !== id);
     }
@@ -344,57 +690,93 @@ export class Store {
     return true;
   }
 
-  countAdmins(): number {
-    return this.data.users.filter((u) => u.role === 'admin' && !u.banned).length;
+  countAdmins(serverId: string): number {
+    return Object.values(this.data.memberships[serverId] ?? {}).filter(
+      (membership) => membership.role === 'admin' && !this.userById(membership.userId)?.banned,
+    ).length;
   }
 
-  adminUsers(): AdminUser[] {
-    return this.data.users.map((u) => ({
-      id: u.id,
-      username: u.username,
-      displayName: u.displayName,
-      label: u.label,
-      role: u.role,
-      roleIds: [...u.roleIds],
-      isGuest: false,
-      banned: u.banned,
-      createdAt: u.createdAt,
-    }));
+  adminUsers(serverId: string): AdminUser[] {
+    const map = this.data.memberships[serverId] ?? {};
+    const result: AdminUser[] = [];
+    for (const user of this.data.users) {
+      const membership = map[user.id];
+      if (!membership) continue;
+      result.push({
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        label: membership.label,
+        role: membership.role,
+        roleIds: [...membership.roleIds],
+        isGuest: false,
+        banned: user.banned,
+        createdAt: user.createdAt,
+      });
+    }
+    return result;
   }
 
-  setUserRoles(id: string, roleIds: string[]): StoredUser | undefined {
-    const user = this.userById(id);
-    if (!user) return undefined;
-    const known = new Set(this.data.roles.map((role) => role.id));
-    user.roleIds = [...new Set(roleIds)].filter((roleId) => known.has(roleId));
+  setRole(serverId: string, userId: string, role: BaseRole): StoredMembership | undefined {
+    const membership = this.membership(serverId, userId);
+    if (!membership) return undefined;
+    membership.role = role;
     this.saveNow();
-    return user;
+    return membership;
   }
 
-  // --- roles ---
-
-  roles(): Role[] {
-    return this.data.roles;
+  setLabel(serverId: string, userId: string, label: string): StoredMembership | undefined {
+    const membership = this.membership(serverId, userId);
+    if (!membership) return undefined;
+    const trimmed = label.trim();
+    if (trimmed) membership.label = trimmed;
+    else delete membership.label;
+    this.saveNow();
+    return membership;
   }
 
-  roleById(id: string): Role | undefined {
+  setUserRoles(
+    serverId: string,
+    userId: string,
+    roleIds: string[],
+  ): StoredMembership | undefined {
+    const membership = this.membership(serverId, userId);
+    if (!membership) return undefined;
+    const known = new Set(
+      this.data.roles.filter((role) => role.serverId === serverId).map((role) => role.id),
+    );
+    membership.roleIds = [...new Set(roleIds)].filter((roleId) => known.has(roleId));
+    this.saveNow();
+    return membership;
+  }
+
+  // ---------- роли ----------
+
+  roles(serverId: string): Role[] {
+    return this.data.roles.filter((role) => role.serverId === serverId);
+  }
+
+  roleById(id: string): StoredRole | undefined {
     return this.data.roles.find((role) => role.id === id);
   }
 
-  roleByName(name: string, exceptId?: string): Role | undefined {
+  roleByName(serverId: string, name: string, exceptId?: string): StoredRole | undefined {
     const normalized = name.trim().toLowerCase();
     return this.data.roles.find(
-      (role) => role.id !== exceptId && role.name.toLowerCase() === normalized,
+      (role) =>
+        role.serverId === serverId &&
+        role.id !== exceptId &&
+        role.name.toLowerCase() === normalized,
     );
   }
 
-  createRole(input: {
-    name: string;
-    color: string;
-    permissions: RolePermissions;
-  }): Role {
-    const role: Role = {
+  createRole(
+    serverId: string,
+    input: { name: string; color: string; permissions: RolePermissions },
+  ): StoredRole {
+    const role: StoredRole = {
       id: crypto.randomUUID(),
+      serverId,
       name: input.name.trim(),
       color: input.color,
       permissions: { ...input.permissions },
@@ -408,7 +790,7 @@ export class Store {
   updateRole(
     id: string,
     patch: { name?: string; color?: string; permissions?: RolePermissions },
-  ): Role | undefined {
+  ): StoredRole | undefined {
     const role = this.roleById(id);
     if (!role) return undefined;
     if (patch.name !== undefined) role.name = patch.name.trim();
@@ -418,29 +800,33 @@ export class Store {
     return role;
   }
 
-  deleteRole(id: string): string[] {
+  // Возвращает участников этого сервера, у которых роль была снята.
+  deleteRole(serverId: string, id: string): string[] {
     const before = this.data.roles.length;
-    this.data.roles = this.data.roles.filter((role) => role.id !== id);
+    this.data.roles = this.data.roles.filter(
+      (role) => !(role.id === id && role.serverId === serverId),
+    );
     if (this.data.roles.length === before) return [];
     const affected: string[] = [];
-    for (const user of this.data.users) {
-      if (!user.roleIds.includes(id)) continue;
-      user.roleIds = user.roleIds.filter((roleId) => roleId !== id);
-      affected.push(user.id);
+    for (const membership of Object.values(this.data.memberships[serverId] ?? {})) {
+      if (!membership.roleIds.includes(id)) continue;
+      membership.roleIds = membership.roleIds.filter((roleId) => roleId !== id);
+      affected.push(membership.userId);
     }
     for (const channel of this.data.channels) {
-      if (!channel.visibleRoleIds.includes(id)) continue;
+      if (channel.serverId !== serverId || !channel.visibleRoleIds.includes(id)) continue;
       channel.visibleRoleIds = channel.visibleRoleIds.filter((roleId) => roleId !== id);
     }
     this.saveNow();
     return affected;
   }
 
-  // --- channels ---
+  // ---------- каналы ----------
 
   private channelDto(channel: StoredChannel): Channel {
     return {
       id: channel.id,
+      serverId: channel.serverId,
       name: channel.name,
       type: channel.type,
       guest: channel.guest,
@@ -451,22 +837,28 @@ export class Store {
     };
   }
 
-  channels(): Channel[] {
-    return this.data.channels.map((channel) => this.channelDto(channel));
+  channels(serverId: string): Channel[] {
+    return this.data.channels
+      .filter((channel) => channel.serverId === serverId)
+      .map((channel) => this.channelDto(channel));
   }
 
   channelById(id: string): StoredChannel | undefined {
     return this.data.channels.find((c) => c.id === id);
   }
 
-  channelByName(name: string, exceptId?: string): StoredChannel | undefined {
+  channelByName(serverId: string, name: string, exceptId?: string): StoredChannel | undefined {
     const normalized = name.trim().toLowerCase();
     return this.data.channels.find(
-      (c) => c.id !== exceptId && c.name.toLowerCase() === normalized,
+      (c) =>
+        c.serverId === serverId &&
+        c.id !== exceptId &&
+        c.name.toLowerCase() === normalized,
     );
   }
 
   createChannel(
+    serverId: string,
     name: string,
     type: ChannelType,
     passwordHash?: string,
@@ -474,6 +866,7 @@ export class Store {
   ): StoredChannel {
     const channel: StoredChannel = {
       id: crypto.randomUUID(),
+      serverId,
       name: name.trim(),
       type,
       visibleRoles: [...(visibility?.visibleRoles ?? BASE_ROLES)],
@@ -517,26 +910,38 @@ export class Store {
     return removed;
   }
 
-  // --- broadcast groups ---
+  // ---------- группы вещания ----------
 
-  broadcastGroups(): BroadcastGroup[] {
-    return this.data.broadcastGroups;
+  broadcastGroups(serverId: string): StoredBroadcastGroup[] {
+    return this.data.broadcastGroups.filter((group) => group.serverId === serverId);
   }
 
-  broadcastGroupById(id: string): BroadcastGroup | undefined {
+  broadcastGroupById(id: string): StoredBroadcastGroup | undefined {
     return this.data.broadcastGroups.find((group) => group.id === id);
   }
 
-  broadcastGroupByName(name: string, exceptId?: string): BroadcastGroup | undefined {
+  broadcastGroupByName(
+    serverId: string,
+    name: string,
+    exceptId?: string,
+  ): StoredBroadcastGroup | undefined {
     const normalized = name.trim().toLowerCase();
     return this.data.broadcastGroups.find(
-      (group) => group.id !== exceptId && group.name.toLowerCase() === normalized,
+      (group) =>
+        group.serverId === serverId &&
+        group.id !== exceptId &&
+        group.name.toLowerCase() === normalized,
     );
   }
 
-  createBroadcastGroup(name: string, memberIds: string[]): BroadcastGroup {
-    const group: BroadcastGroup = {
+  createBroadcastGroup(
+    serverId: string,
+    name: string,
+    memberIds: string[],
+  ): StoredBroadcastGroup {
+    const group: StoredBroadcastGroup = {
       id: crypto.randomUUID(),
+      serverId,
       name: name.trim(),
       memberIds: [...new Set(memberIds)],
       createdAt: Date.now(),
@@ -549,7 +954,7 @@ export class Store {
   updateBroadcastGroup(
     id: string,
     patch: { name?: string; memberIds?: string[] },
-  ): BroadcastGroup | undefined {
+  ): StoredBroadcastGroup | undefined {
     const group = this.broadcastGroupById(id);
     if (!group) return undefined;
     if (patch.name !== undefined) group.name = patch.name.trim();
@@ -566,7 +971,7 @@ export class Store {
     return removed;
   }
 
-  // --- messages ---
+  // ---------- сообщения ----------
 
   messages(channelId: string, limit = 100): ChatMessage[] {
     const list = this.data.messages[channelId] ?? [];
@@ -596,7 +1001,7 @@ export class Store {
     return true;
   }
 
-  // --- direct messages ---
+  // ---------- личные сообщения ----------
 
   directMessages(userId: string, peerId: string, limit = 100): DirectMessage[] {
     const list = this.data.directMessages[conversationKey(userId, peerId)] ?? [];
@@ -628,7 +1033,7 @@ export class Store {
     return result.sort((a, b) => b.last.ts - a.last.ts);
   }
 
-  // --- push subscriptions ---
+  // ---------- push-подписки ----------
 
   pushSubscriptions(userId: string): StoredPushSubscription[] {
     return this.data.pushSubscriptions[userId] ?? [];
@@ -677,7 +1082,7 @@ export class Store {
     this.saveSoon();
   }
 
-  // --- FCM tokens ---
+  // ---------- FCM-токены ----------
 
   fcmTokens(userId: string): StoredFcmToken[] {
     return this.data.fcmTokens[userId] ?? [];
